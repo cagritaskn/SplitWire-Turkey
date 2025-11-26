@@ -1,0 +1,159 @@
+name: Windows Specific Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Her hafta Pazar günü saat 03:00 UTC'de çalış
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to test"
+        required: false
+        default: "main"
+        type: string
+      test_type:
+        description: "Type of Windows tests to run"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - "all"
+          - "compatibility"
+          - "performance"
+          - "security"
+          - "installer"
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  windows-compatibility:
+    runs-on: windows-latest
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'compatibility' || github.event_name != 'workflow_dispatch'
+
+    strategy:
+      matrix:
+        windows-version: ["windows-latest"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Display test info
+        run: |
+          Write-Host "🖥️ Windows Compatibility Tests Started"
+          Write-Host "Branch: ${{ github.event.inputs.branch || github.ref_name }}"
+          Write-Host "Test Type: ${{ github.event.inputs.test_type || 'all' }}"
+          Write-Host "Matrix Version: ${{ matrix.windows-version }}"
+        shell: pwsh
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-windows-compat-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-windows-compat-
+            ${{ runner.os }}-nuget-windows-
+            ${{ runner.os }}-nuget-
+
+      - name: Cache build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/**/bin
+            src/**/obj
+          key: ${{ runner.os }}-build-windows-compat-${{ hashFiles('**/*.csproj', '**/*.cs') }}
+          restore-keys: |
+            ${{ runner.os }}-build-windows-compat-
+            ${{ runner.os }}-build-windows-
+            ${{ runner.os }}-build-
+
+      - name: Display Windows info
+        run: |
+          Write-Host "🖥️ OS Version: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "🔧 Processor Count: $([System.Environment]::ProcessorCount)"
+          Write-Host "💾 Working Set: $([math]::Round([System.Environment]::WorkingSet / 1MB, 2)) MB"
+        shell: pwsh
+
+      - name: Test Windows functionality
+        run: |
+          # Test Windows Registry access
+          try {
+            $regValue = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "ProductName"
+            Write-Host "✅ Registry access: $($regValue.ProductName)"
+          } catch {
+            Write-Host "❌ Registry access failed"
+          }
+
+          # Test Windows Services
+          try {
+            $services = Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object -First 5
+            Write-Host "✅ Services accessible: $($services.Count) running"
+          } catch {
+            Write-Host "❌ Services access failed"
+          }
+        shell: pwsh
+
+      - name: Build and test application
+        run: |
+          dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+          dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --no-restore
+
+          # Test if executable can be created
+          dotnet publish src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --output ./test-publish --no-restore
+
+          if (Test-Path "./test-publish/SplitWire-Turkey.exe") {
+            Write-Host "✅ Windows executable created successfully"
+            $fileInfo = Get-Item "./test-publish/SplitWire-Turkey.exe"
+            Write-Host "📊 Executable size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
+            Write-Host "📅 Created: $($fileInfo.CreationTime)"
+          } else {
+            Write-Host "❌ Windows executable not found"
+            exit 1
+          }
+        shell: pwsh
+
+  build-test:
+    runs-on: windows-latest
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'performance' || github.event_name != 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-windows-test-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-windows-test-
+            ${{ runner.os }}-nuget-windows-
+            ${{ runner.os }}-nuget-
+
+      - name: Build and test
+        run: |
+          dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj --locked-mode
+          dotnet restore src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --locked-mode
+          dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --no-restore
+          dotnet build src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release --no-restore
+          dotnet test src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release --no-build --filter "Category=Windows"
+        continue-on-error: true

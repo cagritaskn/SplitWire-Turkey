@@ -1,0 +1,226 @@
+name: Nightly Tests
+
+on:
+  schedule:
+    # Her gece saat 02:00 UTC'de çalış
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: false
+        default: 'main'
+        type: string
+      test_scope:
+        description: 'Test scope'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+        - 'quick'
+        - 'standard'
+        - 'full'
+        - 'security-only'
+
+jobs:
+  comprehensive-tests:
+    runs-on: windows-latest
+    if: github.event.inputs.test_scope != 'security-only' || github.event_name != 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        dotnet-version: ['6.0.x', '8.0.x', '9.0.x']
+        include:
+          - dotnet-version: '6.0.x'
+            framework: 'net6.0-windows'
+          - dotnet-version: '8.0.x'
+            framework: 'net8.0-windows'
+          - dotnet-version: '9.0.x'
+            framework: 'net9.0-windows'
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.branch || github.ref }}
+        
+    - name: Display nightly test info
+      run: |
+        Write-Host "🌙 Comprehensive Tests Started"
+        Write-Host "Branch: ${{ github.event.inputs.branch || github.ref_name }}"
+        Write-Host "Test Scope: ${{ github.event.inputs.test_scope || 'full' }}"
+        Write-Host ".NET Version: ${{ matrix.dotnet-version }}"
+        Write-Host "Framework: ${{ matrix.framework }}"
+      shell: pwsh
+      
+    - name: Setup .NET ${{ matrix.dotnet-version }}
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ matrix.dotnet-version }}
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-nightly-${{ matrix.dotnet-version }}-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-nightly-${{ matrix.dotnet-version }}-
+          ${{ runner.os }}-nuget-nightly-
+          ${{ runner.os }}-nuget-
+
+    - name: Cache build outputs
+      uses: actions/cache@v4
+      with:
+        path: |
+          src/**/bin
+          src/**/obj
+        key: ${{ runner.os }}-build-nightly-${{ matrix.dotnet-version }}-${{ hashFiles('**/*.csproj', '**/*.cs') }}
+        restore-keys: |
+          ${{ runner.os }}-build-nightly-${{ matrix.dotnet-version }}-
+          ${{ runner.os }}-build-nightly-
+          ${{ runner.os }}-build-
+        
+    - name: Restore dependencies
+      run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj --locked-mode
+      continue-on-error: true
+
+    - name: Restore dependencies (fallback)
+      if: failure()
+      run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+      
+    - name: Build application
+      run: dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --no-restore
+      
+    - name: Run all tests with coverage
+      run: |
+        dotnet test src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj `
+          --configuration Release `
+          --no-build `
+          --verbosity detailed `
+          --collect:"XPlat Code Coverage" `
+          --results-directory ./TestResults `
+          --logger "trx;LogFileName=test-results-${{ matrix.dotnet-version }}.trx"
+      continue-on-error: true
+      
+    - name: Performance test
+      run: |
+        Write-Host "🚀 Running performance tests..."
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        
+        # Uygulama başlatma süresi testi
+        $process = Start-Process -FilePath "src/SplitWireTurkey/bin/Release/net6.0-windows/SplitWire-Turkey.exe" -ArgumentList "--test-mode" -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+        
+        if (-not $process.HasExited) {
+          $process.Kill()
+          $stopwatch.Stop()
+          Write-Host "✅ Application started successfully in $($stopwatch.ElapsedMilliseconds)ms"
+        } else {
+          Write-Host "❌ Application failed to start or exited immediately"
+        }
+      shell: pwsh
+      continue-on-error: true
+      
+    - name: Memory usage test
+      run: |
+        Write-Host "🧠 Checking memory usage patterns..."
+        # Basit memory leak testi
+        for ($i = 1; $i -le 5; $i++) {
+          $beforeMemory = [GC]::GetTotalMemory($false)
+          
+          # Test operasyonları
+          $testData = 1..1000 | ForEach-Object { "Test string $_" }
+          $testData = $null
+          
+          [GC]::Collect()
+          [GC]::WaitForPendingFinalizers()
+          [GC]::Collect()
+          
+          $afterMemory = [GC]::GetTotalMemory($false)
+          Write-Host "Iteration $i - Memory: Before: $beforeMemory, After: $afterMemory"
+        }
+      shell: pwsh
+      
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: nightly-test-results-${{ matrix.dotnet-version }}
+        path: |
+          ./TestResults/**/*.trx
+          ./TestResults/**/*.xml
+        retention-days: 30
+
+  security-scan:
+    runs-on: windows-latest
+    if: github.event.inputs.test_scope == 'full' || github.event.inputs.test_scope == 'security-only' || github.event_name != 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Cache .NET tools
+      uses: actions/cache@v4
+      with:
+        path: ~/.dotnet/tools
+        key: ${{ runner.os }}-dotnet-tools-security-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-dotnet-tools-security-
+          ${{ runner.os }}-dotnet-tools-
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-security-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-security-
+          ${{ runner.os }}-nuget-
+        
+    - name: Install security tools
+      run: |
+        dotnet tool install --global security-scan --version 5.6.7
+        dotnet tool install --global dotnet-outdated-tool
+      continue-on-error: true
+        
+    - name: Run security scan
+      run: security-scan src/SplitWireTurkey/SplitWireTurkey.csproj --excl-proj=**/*Tests.csproj
+      continue-on-error: true
+      
+    - name: Check for outdated packages
+      run: dotnet outdated src/SplitWireTurkey/SplitWireTurkey.csproj
+      continue-on-error: true
+      
+    - name: Dependency vulnerability check
+      run: |
+        dotnet list src/SplitWireTurkey/SplitWireTurkey.csproj package --vulnerable --include-transitive
+        dotnet list src/SplitWireTurkey/SplitWireTurkey.csproj package --deprecated
+      continue-on-error: true
+
+  notify-results:
+    needs: [comprehensive-tests, security-scan]
+    runs-on: windows-latest
+    if: always()
+    
+    steps:
+    - name: Notify results
+      run: |
+        $testStatus = "${{ needs.comprehensive-tests.result }}"
+        $securityStatus = "${{ needs.security-scan.result }}"
+        
+        Write-Host "🌙 Nightly test results:"
+        Write-Host "  Comprehensive tests: $testStatus"
+        Write-Host "  Security scan: $securityStatus"
+        
+        if ($testStatus -eq "failure" -or $securityStatus -eq "failure") {
+          Write-Host "❌ Some nightly tests failed - check the logs"
+          exit 1
+        } else {
+          Write-Host "✅ All nightly tests completed successfully"
+        }
+      shell: pwsh

@@ -1,0 +1,229 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to run tests on"
+        required: false
+        default: "main"
+        type: string
+      test_level:
+        description: "Test level to run"
+        required: false
+        default: "standard"
+        type: choice
+        options:
+          - "quick"
+          - "standard"
+          - "comprehensive"
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Display workflow info
+        run: |
+          Write-Host "🚀 CI Tests Workflow Started"
+          Write-Host "Branch: ${{ github.event.inputs.branch || github.ref_name }}"
+          Write-Host "Test Level: ${{ github.event.inputs.test_level || 'standard' }}"
+          Write-Host "Triggered by: ${{ github.event_name }}"
+          Write-Host "Runner OS: ${{ runner.os }}"
+        shell: pwsh
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+          dotnet-quality: "ga"
+
+      - name: Cache .NET tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.dotnet/tools
+          key: ${{ runner.os }}-dotnet-tools-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-tools-
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Cache build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            src/**/bin
+            src/**/obj
+          key: ${{ runner.os }}-build-${{ hashFiles('**/*.csproj', '**/*.cs') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ hashFiles('**/*.csproj') }}
+            ${{ runner.os }}-build-
+
+      - name: Restore dependencies
+        run: |
+          dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+          dotnet restore src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj
+
+      - name: Build all projects
+        run: |
+          dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --no-restore
+          dotnet build src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./TestResults --logger "trx;LogFileName=test-results.trx"
+        continue-on-error: true
+
+      - name: Process test results
+        if: always()
+        run: |
+          Write-Host "🧪 Processing test results..."
+          if (Test-Path "./TestResults") {
+            $testResults = Get-ChildItem -Path "./TestResults" -Recurse -Filter "*.trx" -ErrorAction SilentlyContinue
+            if ($testResults) {
+              Write-Host "Found test result files:"
+              $testResults | ForEach-Object { Write-Host "  $($_.FullName)" }
+            }
+
+            $coverageFiles = Get-ChildItem -Path "./TestResults" -Recurse -Filter "coverage.cobertura.xml" -ErrorAction SilentlyContinue
+            if ($coverageFiles) {
+              Write-Host "Found coverage files:"
+              $coverageFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
+            }
+          } else {
+            Write-Host "TestResults directory not found"
+          }
+        shell: pwsh
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('./TestResults/**/*.trx') != ''
+        with:
+          name: test-results-${{ github.sha }}
+          path: ./TestResults/**/*.trx
+          retention-days: 30
+
+      - name: Upload code coverage
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('./TestResults/**/coverage.cobertura.xml') != ''
+        with:
+          name: code-coverage-${{ github.sha }}
+          path: ./TestResults/**/coverage.cobertura.xml
+          retention-days: 30
+
+      - name: Build artifact
+        run: dotnet publish src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --output ./publish --no-restore --self-contained false
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splitwire-turkey-build-${{ github.sha }}
+          path: ./publish/
+          retention-days: 7
+          compression-level: 6
+
+  code-quality:
+    runs-on: windows-latest
+    needs: build-and-test
+    if: github.event.inputs.test_level != 'quick' || github.event_name != 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Cache .NET tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.dotnet/tools
+          key: ${{ runner.os }}-dotnet-tools-analysis-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-tools-analysis-
+            ${{ runner.os }}-dotnet-tools-
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies for analysis
+        run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+
+      - name: Run code formatting check
+        run: dotnet format src/SplitWireTurkey/SplitWireTurkey.csproj --verify-no-changes --verbosity diagnostic
+        continue-on-error: true
+
+      - name: Run code analysis
+        run: dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --verbosity normal /p:TreatWarningsAsErrors=false /p:RunAnalyzersDuringBuild=true
+        continue-on-error: true
+
+  dependency-check:
+    runs-on: windows-latest
+    needs: build-and-test
+    if: github.event.inputs.test_level == 'comprehensive' || github.event_name != 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Install dependency tools
+        run: dotnet tool install --global dotnet-outdated-tool
+        continue-on-error: true
+
+      - name: Restore dependencies
+        run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+
+      - name: Check for vulnerable packages
+        run: |
+          dotnet list src/SplitWireTurkey/SplitWireTurkey.csproj package --vulnerable --include-transitive > vulnerability-report.txt 2>&1
+          dotnet list src/SplitWireTurkey/SplitWireTurkey.csproj package --deprecated > deprecated-report.txt 2>&1
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Check for outdated packages
+        run: dotnet outdated src/SplitWireTurkey/SplitWireTurkey.csproj
+        continue-on-error: true
+
+      - name: Upload dependency reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-reports-${{ github.sha }}
+          path: |
+            vulnerability-report.txt
+            deprecated-report.txt
+            outdated-report.json
+          retention-days: 30

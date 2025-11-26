@@ -1,0 +1,148 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to validate (optional)'
+        required: false
+        type: string
+      branch:
+        description: 'Branch to validate'
+        required: false
+        default: 'main'
+        type: string
+
+jobs:
+  validate-pr:
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.inputs.branch || github.ref }}
+        
+    - name: Display validation info
+      run: |
+        Write-Host "🔍 PR Validation Workflow Started"
+        Write-Host "Branch: ${{ github.event.inputs.branch || github.ref_name }}"
+        Write-Host "PR Number: ${{ github.event.inputs.pr_number || github.event.pull_request.number || 'Manual' }}"
+        Write-Host "Triggered by: ${{ github.event_name }}"
+      shell: pwsh
+        
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-pr-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-pr-
+          ${{ runner.os }}-nuget-
+
+    - name: Cache build outputs
+      uses: actions/cache@v4
+      with:
+        path: |
+          src/**/bin
+          src/**/obj
+        key: ${{ runner.os }}-build-pr-${{ hashFiles('**/*.csproj', '**/*.cs') }}
+        restore-keys: |
+          ${{ runner.os }}-build-pr-
+          ${{ runner.os }}-build-
+        
+    - name: Validate PR title
+      run: |
+        $title = "${{ github.event.pull_request.title }}"
+        if ($title -match "^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+") {
+          Write-Host "✅ PR title format is valid: $title"
+        } else {
+          Write-Host "❌ PR title should follow conventional commits format"
+          Write-Host "Examples: 'feat: add new feature', 'fix(ui): resolve button issue'"
+          exit 1
+        }
+      shell: pwsh
+      
+    - name: Check for breaking changes
+      run: |
+        $body = "${{ github.event.pull_request.body }}"
+        $hasBreaking = $body -match "BREAKING CHANGE" -or "${{ github.event.pull_request.title }}" -match "!"
+        if ($hasBreaking) {
+          Write-Host "⚠️ Breaking changes detected - ensure proper versioning"
+        }
+      shell: pwsh
+      
+    - name: Restore dependencies
+      run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj --locked-mode
+      continue-on-error: true
+
+    - name: Restore dependencies (fallback)
+      if: failure()
+      run: dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+      
+    - name: Build for validation
+      run: dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release --no-restore
+      
+    - name: Run quick tests
+      run: dotnet test src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release --no-build --verbosity minimal
+      continue-on-error: true
+      
+    - name: Check file changes
+      run: |
+        $changedFiles = git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD
+        Write-Host "Changed files:"
+        $changedFiles | ForEach-Object { Write-Host "  $_" }
+        
+        $hasSourceChanges = $changedFiles | Where-Object { $_ -match "^src/" }
+        $hasTestChanges = $changedFiles | Where-Object { $_ -match "Tests/" }
+        
+        if ($hasSourceChanges -and -not $hasTestChanges) {
+          Write-Host "⚠️ Source code changes detected without corresponding test updates"
+          Write-Host "Consider adding or updating tests for your changes"
+        }
+      shell: pwsh
+
+  size-check:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-size-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-size-
+          ${{ runner.os }}-nuget-
+        
+    - name: Build and check size
+      run: |
+        dotnet publish src/SplitWireTurkey/SplitWireTurkey.csproj -c Release -o ./publish
+        $size = (Get-ChildItem ./publish -Recurse | Measure-Object -Property Length -Sum).Sum
+        $sizeMB = [math]::Round($size / 1MB, 2)
+        
+        Write-Host "📦 Build size: $sizeMB MB"
+        
+        if ($sizeMB -gt 100) {
+          Write-Host "⚠️ Build size is quite large ($sizeMB MB)"
+          Write-Host "Consider optimizing dependencies or assets"
+        }
+      shell: pwsh

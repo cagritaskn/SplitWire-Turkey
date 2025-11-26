@@ -1,0 +1,122 @@
+name: Manual Test Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: true
+        default: 'main'
+        type: string
+      workflow_to_run:
+        description: 'Which workflow to run'
+        required: true
+        type: choice
+        options:
+        - 'ci-tests'
+        - 'pr-validation'
+        - 'nightly-tests'
+        - 'windows-specific'
+        - 'all-workflows'
+      test_parameters:
+        description: 'Additional test parameters (JSON format)'
+        required: false
+        default: '{}'
+        type: string
+
+jobs:
+  trigger-workflows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Display trigger info
+      run: |
+        Write-Host "🚀 Manual Test Runner Started"
+        Write-Host "Branch: ${{ github.event.inputs.branch }}"
+        Write-Host "Workflow: ${{ github.event.inputs.workflow_to_run }}"
+        Write-Host "Parameters: ${{ github.event.inputs.test_parameters }}"
+        Write-Host "Triggered by: ${{ github.actor }}"
+        Write-Host "Repository: ${{ github.repository }}"
+      shell: pwsh
+      
+    - name: Trigger CI Tests
+      if: github.event.inputs.workflow_to_run == 'ci-tests' || github.event.inputs.workflow_to_run == 'all-workflows'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'ci.yml',
+            ref: '${{ github.event.inputs.branch }}',
+            inputs: {
+              branch: '${{ github.event.inputs.branch }}',
+              test_level: 'standard'
+            }
+          });
+          console.log('✅ CI Tests workflow triggered');
+          
+    - name: Trigger PR Validation
+      if: github.event.inputs.workflow_to_run == 'pr-validation' || github.event.inputs.workflow_to_run == 'all-workflows'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'pr-validation.yml',
+            ref: '${{ github.event.inputs.branch }}',
+            inputs: {
+              branch: '${{ github.event.inputs.branch }}'
+            }
+          });
+          console.log('✅ PR Validation workflow triggered');
+          
+    - name: Trigger Nightly Tests
+      if: github.event.inputs.workflow_to_run == 'nightly-tests' || github.event.inputs.workflow_to_run == 'all-workflows'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'nightly-tests.yml',
+            ref: '${{ github.event.inputs.branch }}',
+            inputs: {
+              branch: '${{ github.event.inputs.branch }}',
+              test_scope: 'standard'
+            }
+          });
+          console.log('✅ Nightly Tests workflow triggered');
+          
+    - name: Trigger Windows Specific Tests
+      if: github.event.inputs.workflow_to_run == 'windows-specific' || github.event.inputs.workflow_to_run == 'all-workflows'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'windows-specific-tests.yml',
+            ref: '${{ github.event.inputs.branch }}',
+            inputs: {
+              branch: '${{ github.event.inputs.branch }}',
+              test_type: 'all'
+            }
+          });
+          console.log('✅ Windows Specific Tests workflow triggered');
+          
+    - name: Wait and check status
+      run: |
+        Write-Host "⏳ Waiting for workflows to start..."
+        Start-Sleep -Seconds 10
+        
+        Write-Host "🔍 You can monitor the triggered workflows at:"
+        Write-Host "https://github.com/${{ github.repository }}/actions"
+        
+        Write-Host "`n📋 Triggered workflows summary:"
+        Write-Host "- Branch: ${{ github.event.inputs.branch }}"
+        Write-Host "- Workflow type: ${{ github.event.inputs.workflow_to_run }}"
+        Write-Host "- Triggered by: ${{ github.actor }}"
+        Write-Host "- Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
+      shell: pwsh
