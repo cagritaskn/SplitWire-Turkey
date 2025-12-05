@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+
+  <vendor>SplitWire-Turkey</vendor>
+  <vendor_url>https://github.com/cagritaskn/SplitWire-Turkey</vendor_url>
+  <icon_name>network-vpn</icon_name>
+
+  <!-- WireGuard operations -->
+  <action id="com.splitwire.turkey.wireguard">
+    <description>Manage WireGuard VPN connections</description>
+    <description xml:lang="tr">WireGuard VPN baglantilarini yonet</description>
+    <message>Authentication is required to manage WireGuard VPN connections</message>
+    <message xml:lang="tr">WireGuard VPN baglantilarini yonetmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>network-vpn</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/wg-quick</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- Zapret/DPI bypass operations -->
+  <action id="com.splitwire.turkey.zapret">
+    <description>Manage DPI bypass services (Zapret)</description>
+    <description xml:lang="tr">DPI asim servislerini yonet (Zapret)</description>
+    <message>Authentication is required to manage DPI bypass services</message>
+    <message xml:lang="tr">DPI asim servislerini yonetmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>network-transmit-receive</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- DNS management -->
+  <action id="com.splitwire.turkey.dns">
+    <description>Manage DNS settings</description>
+    <description xml:lang="tr">DNS ayarlarini yonet</description>
+    <message>Authentication is required to change DNS settings</message>
+    <message xml:lang="tr">DNS ayarlarini degistirmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>network-server</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/resolvectl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- General system operations (service management, file operations) -->
+  <action id="com.splitwire.turkey.system">
+    <description>Manage SplitWire-Turkey system services</description>
+    <description xml:lang="tr">SplitWire-Turkey sistem servislerini yonet</description>
+    <message>Authentication is required to manage SplitWire-Turkey services</message>
+    <message xml:lang="tr">SplitWire-Turkey servislerini yonetmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>system-run</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- iptables/nftables firewall rules -->
+  <action id="com.splitwire.turkey.firewall">
+    <description>Manage firewall rules for DPI bypass</description>
+    <description xml:lang="tr">DPI asimi icin guvenlik duvari kurallarini yonet</description>
+    <message>Authentication is required to modify firewall rules</message>
+    <message xml:lang="tr">Guvenlik duvari kurallarini degistirmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>security-high</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/iptables</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+  <!-- Run splitwire helper script as root -->
+  <action id="com.splitwire.turkey.helper">
+    <description>Run SplitWire-Turkey administrative tasks</description>
+    <description xml:lang="tr">SplitWire-Turkey yonetici gorevlerini calistir</description>
+    <message>Authentication is required to perform SplitWire-Turkey administrative tasks</message>
+    <message xml:lang="tr">SplitWire-Turkey yonetici gorevlerini gerceklestirmek icin kimlik dogrulama gerekiyor</message>
+    <icon_name>applications-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/splitwire-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>
