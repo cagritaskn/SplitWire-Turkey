@@ -1,0 +1,17 @@
+[Unit]
+Description=SplitWire-Turkey WireGuard Periodic Refresh Timer
+Documentation=https://github.com/cagritaskn/SplitWire-Turkey
+
+[Timer]
+# Run every 30 minutes
+OnBootSec=30min
+OnUnitActiveSec=30min
+
+# Randomize slightly to avoid thundering herd
+RandomizedDelaySec=60
+
+# Keep timer running even when laptop is on battery
+Persistent=true
+
+[Install]
+WantedBy=timers.target

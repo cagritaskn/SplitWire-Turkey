@@ -1,0 +1,28 @@
+[Unit]
+Description=SplitWire-Turkey cgproxy for Split Tunneling
+Documentation=https://github.com/cagritaskn/SplitWire-Turkey
+After=network-online.target splitwire-wg.service
+Wants=network-online.target
+BindsTo=splitwire-wg.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cgproxyd
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart configuration
+Restart=on-failure
+RestartSec=5
+
+# Capabilities needed for cgroup and network control
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
+
+# Security (limited due to network requirements)
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/sys/fs/cgroup /etc/cgproxy
+
+[Install]
+WantedBy=multi-user.target

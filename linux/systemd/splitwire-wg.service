@@ -1,0 +1,26 @@
+[Unit]
+Description=SplitWire-Turkey WireGuard VPN
+Documentation=https://github.com/cagritaskn/SplitWire-Turkey
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up splitwire
+ExecStop=/usr/bin/wg-quick down splitwire
+ExecReload=/bin/bash -c 'wg-quick down splitwire && wg-quick up splitwire'
+
+# Restart configuration
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=no
+ReadWritePaths=/etc/wireguard
+
+[Install]
+WantedBy=multi-user.target
