@@ -2,9 +2,16 @@
   <img width="auto" height="128" src="https://github.com/cagritaskn/SplitWire-Turkey/blob/main/src/SplitWireTurkey/Resources/splitwire-logo-128.png">
 </p>
 
-# <p align="center"><strong>SplitWire-Turkey</strong></p>
+# <p align="center"><strong>SplitWire-Turkey Linux</strong></p>
 
 <div align="center">
+
+> [!WARNING]
+> **🚧 GELİŞTİRME AŞAMASINDA / UNDER DEVELOPMENT 🚧**
+>
+> Bu repo, SplitWire-Turkey'in Linux sürümünü içermektedir. Proje henüz tamamlanmamıştır ve aktif olarak geliştirilmektedir. Kullanıma hazır değildir.
+>
+> This repository contains the Linux version of SplitWire-Turkey. The project is not yet complete and is actively under development. It is not ready for use.
 
 <strong>Multilingual README (TR/EN/RU/ES)</strong>
 
