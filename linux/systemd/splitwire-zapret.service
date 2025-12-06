@@ -1,0 +1,35 @@
+[Unit]
+Description=SplitWire Zapret DPI Bypass Service
+Documentation=https://github.com/bol-van/zapret
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+Environment=PYTHONPATH=/opt/splitwire/lib/python
+
+# Start zapret with saved configuration
+ExecStart=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; svc = get_zapret_service(); exit(0 if svc.start() else 1)"
+
+# Stop zapret and remove iptables rules
+ExecStop=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; get_zapret_service().stop()"
+
+# Cleanup iptables rules on reload
+ExecReload=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; svc = get_zapret_service(); svc.stop(); svc.start()"
+
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/splitwire /home
+PrivateTmp=true
+
+# Capabilities needed for iptables and netfilter queue
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
