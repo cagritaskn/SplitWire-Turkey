@@ -212,15 +212,9 @@ class RepairPage(BasePage):
             installations = self._discord_service.get_installations()
             webcord = self._discord_service.get_webcord()
 
-            # Check each version
-            discord_stable = None
-            discord_ptb = None
-
-            for inst in installations:
-                if inst.version == DiscordVersion.STABLE:
-                    discord_stable = inst
-                elif inst.version == DiscordVersion.PTB:
-                    discord_ptb = inst
+            # Check each version - installations is dict[DiscordVersion, DiscordInstallation]
+            discord_stable = installations.get(DiscordVersion.STABLE)
+            discord_ptb = installations.get(DiscordVersion.PTB)
 
             return {
                 "discord": discord_stable,
@@ -319,9 +313,10 @@ class RepairPage(BasePage):
             if clean:
                 # Remove existing Discord first
                 self._discord_service.clear_all_cache()
-                for inst in self._discord_service.get_installations():
-                    if inst.version == DiscordVersion.STABLE:
-                        self._discord_service.uninstall_discord(inst)
+                installations = self._discord_service.get_installations()
+                stable_inst = installations.get(DiscordVersion.STABLE)
+                if stable_inst:
+                    self._discord_service.uninstall_discord(stable_inst)
 
             # Install PTB
             self._discord_service.install_discord(DiscordVersion.PTB)
@@ -414,21 +409,21 @@ class RepairPage(BasePage):
         dialog.add_response("cancel", "İptal")
         dialog.add_response("remove", "Kaldır")
         dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_data("version", version)
+        self._pending_remove_version = version  # Store in instance variable (GTK4 compatible)
         dialog.connect("response", self._on_remove_confirmed)
         dialog.present()
 
     def _on_remove_confirmed(self, dialog, response):
         """Handle remove confirmation."""
         if response == "remove":
-            version = dialog.get_data("version")
+            version = self._pending_remove_version  # Use instance variable (GTK4 compatible)
             self.set_status("Kaldırılıyor...")
 
             def do_remove():
-                for inst in self._discord_service.get_installations():
-                    if inst.version == version:
-                        self._discord_service.uninstall_discord(inst)
-                        break
+                installations = self._discord_service.get_installations()
+                inst = installations.get(version)
+                if inst:
+                    self._discord_service.uninstall_discord(inst)
                 return True
 
             def on_complete(result):

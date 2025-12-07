@@ -916,6 +916,59 @@ class ZapretService(BaseService):
         """Get current configuration."""
         return self._config
 
+    def configure(self, params: Optional[str] = None,
+                  preset: Optional[str] = None,
+                  mode: Optional[ZapretMode] = None) -> bool:
+        """
+        Configure Zapret with specified parameters.
+
+        Args:
+            params: Custom nfqws/tpws parameters
+            preset: Preset name to use
+            mode: Operation mode (nfqws, tpws, combined)
+
+        Returns:
+            True if configuration successful
+        """
+        if preset:
+            self._config.preset_name = preset
+
+        if params:
+            # Determine if it's for nfqws or tpws based on current mode
+            current_mode = mode or self._config.mode
+            if current_mode == ZapretMode.TPWS:
+                self._config.custom_tpws_args = params
+            else:
+                self._config.custom_nfqws_args = params
+
+        if mode:
+            self._config.mode = mode
+
+        self._save_config()
+        self._logger.info(f"Zapret configured with preset={preset}, mode={self._config.mode.value}")
+        return True
+
+    def run_once(self, params: Optional[str] = None,
+                 preset: Optional[str] = None) -> bool:
+        """
+        Run Zapret once without installing as a service.
+
+        Args:
+            params: Custom parameters to use
+            preset: Preset name to use
+
+        Returns:
+            True if started successfully
+        """
+        self._logger.info("Running Zapret once (one-shot mode)...")
+
+        # Configure if params/preset provided
+        if params or preset:
+            self.configure(params=params, preset=preset)
+
+        # Start in one-shot mode
+        return self.start(one_shot=True)
+
     # =========================================================================
     # Installation Helpers
     # =========================================================================

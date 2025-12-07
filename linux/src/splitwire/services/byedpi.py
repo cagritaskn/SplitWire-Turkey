@@ -500,6 +500,32 @@ class ByeDPIService(BaseService):
         """Get list of apps tunneled through proxy."""
         return self._config.tunneled_apps.copy()
 
+    def configure(self, preset: Optional[str] = None,
+                  custom_params: Optional[str] = None,
+                  include_browsers: bool = False) -> bool:
+        """
+        Configure ByeDPI with specified preset or custom parameters.
+
+        Args:
+            preset: Preset name to use
+            custom_params: Custom command line arguments
+            include_browsers: Include browsers in tunneling
+
+        Returns:
+            True if configuration successful
+        """
+        if preset:
+            self._config.preset_name = preset
+
+        if custom_params:
+            self._config.custom_args = custom_params
+
+        self._config.include_browsers = include_browsers
+        self._save_config()
+
+        self._logger.info(f"ByeDPI configured with preset={preset}, include_browsers={include_browsers}")
+        return True
+
     # =========================================================================
     # Helper methods
     # =========================================================================

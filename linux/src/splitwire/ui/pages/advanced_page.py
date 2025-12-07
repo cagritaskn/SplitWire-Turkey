@@ -169,7 +169,7 @@ class AdvancedPage(BasePage):
             margin_start=8,
             visible=False,
         )
-        remove_btn.set_data("service_key", key)
+        remove_btn.set_name(key)  # Store service_key in widget name (GTK4 compatible)
         remove_btn.connect("clicked", self._on_remove_service)
         row.add_suffix(remove_btn)
 
@@ -236,7 +236,7 @@ class AdvancedPage(BasePage):
 
     def _on_remove_service(self, button):
         """Handle individual service remove button."""
-        key = button.get_data("service_key")
+        key = button.get_name()  # Get service_key from widget name (GTK4 compatible)
         info = self._services.get(key)
         if not info:
             return
@@ -250,14 +250,14 @@ class AdvancedPage(BasePage):
         dialog.add_response("cancel", "İptal")
         dialog.add_response("remove", "Kaldır")
         dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_data("service_key", key)
+        self._pending_remove_key = key  # Store in instance variable (GTK4 compatible)
         dialog.connect("response", self._on_service_remove_confirmed)
         dialog.present()
 
     def _on_service_remove_confirmed(self, dialog, response):
         """Handle service remove confirmation."""
         if response == "remove":
-            key = dialog.get_data("service_key")
+            key = self._pending_remove_key  # Use instance variable (GTK4 compatible)
             info = self._services.get(key)
             if not info:
                 return

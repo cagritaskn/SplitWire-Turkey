@@ -11,6 +11,7 @@ gi.require_version('Adw', '1')
 
 from gi.repository import Gtk, Adw, GLib
 from typing import Optional, List, TYPE_CHECKING
+from pathlib import Path
 
 from splitwire.core import get_text, get_config
 from splitwire.services import (
@@ -69,6 +70,16 @@ class MainPage(BasePage):
             tooltip=get_text("tooltips", "alternative_install") or "Alternatif WireGuard kurulumu",
         )
         buttons_group.add(self._btn_alternative)
+
+        # Disconnect button (initially hidden)
+        self._btn_disconnect = self.create_action_button(
+            label=get_text("buttons", "disconnect") or "Bağlantıyı Kes",
+            callback=self._on_disconnect,
+            tooltip=get_text("tooltips", "wireguard_disconnect") or "VPN bağlantısını kes",
+            destructive=True,
+        )
+        self._btn_disconnect.set_visible(False)
+        buttons_group.add(self._btn_disconnect)
 
         # Options group
         options_group = self.create_preferences_group(
@@ -181,32 +192,38 @@ class MainPage(BasePage):
 
     def _build_app_list(self):
         """Build the app selection list inside the expander."""
-        # Known apps section
-        for app_id, app_info in KNOWN_APPS.items():
+        # Known apps section - KNOWN_APPS is {app_id: [paths...]}
+        for app_id, paths in KNOWN_APPS.items():
+            # Get first existing path as subtitle
+            subtitle = ""
+            for path in paths:
+                if Path(path).exists():
+                    subtitle = path
+                    break
+            if not subtitle and paths:
+                subtitle = paths[0]
+
+            # Format app name nicely
+            display_name = app_id.replace("-", " ").replace("_", " ").title()
+
             row = Adw.ActionRow(
-                title=app_info.get("name", app_id),
-                subtitle=app_info.get("path", ""),
+                title=display_name,
+                subtitle=subtitle,
             )
 
-            # Check button
+            # Check button - use set_name to store app_id (GTK4 compatible)
             check = Gtk.CheckButton(
                 active=True,
                 valign=Gtk.Align.CENTER,
             )
-            check.set_data("app_id", app_id)
+            check.set_name(app_id)  # Store app_id in widget name
             check.connect("toggled", self._on_app_toggled)
             row.add_prefix(check)
-
-            # Icon if available
-            icon_name = app_info.get("icon")
-            if icon_name:
-                icon = Gtk.Image.new_from_icon_name(icon_name)
-                row.add_prefix(icon)
 
             self._advanced_expander.add_row(row)
 
     def _update_status_indicator(self):
-        """Update the status indicator."""
+        """Update the status indicator and button visibility."""
         # Clear existing children
         while child := self._status_box.get_first_child():
             self._status_box.remove(child)
@@ -233,6 +250,11 @@ class MainPage(BasePage):
             status_text = "Çalışıyor" if running else "Durduruldu"
         label = Gtk.Label(label=status_text)
         self._status_box.append(label)
+
+        # Update button visibility based on VPN state
+        self._btn_standard.set_sensitive(not running)
+        self._btn_alternative.set_sensitive(not running)
+        self._btn_disconnect.set_visible(running)
 
     def refresh(self):
         """Refresh page data."""
@@ -293,6 +315,22 @@ class MainPage(BasePage):
 
         self.run_async(do_setup, on_complete)
 
+    def _on_disconnect(self, button):
+        """Handle disconnect button click."""
+        self.set_status(get_text("status", "disconnecting") or "Bağlantı kesiliyor...")
+
+        def do_disconnect():
+            self._wg_service.stop()
+            return True
+
+        def on_complete(result):
+            self._update_status_indicator()
+            if result:
+                self.show_toast(get_text("messages", "service_stopped").format("WireGuard") or "WireGuard durduruldu")
+            self.set_status("")
+
+        self.run_async(do_disconnect, on_complete)
+
     def _on_browser_tunneling_changed(self, row, param):
         """Handle browser tunneling switch change."""
         active = row.get_active()
@@ -311,7 +349,7 @@ class MainPage(BasePage):
 
     def _on_app_toggled(self, check):
         """Handle app checkbox toggle."""
-        app_id = check.get_data("app_id")
+        app_id = check.get_name()  # Retrieve app_id from widget name
         active = check.get_active()
         self._logger.info(f"App {app_id}: {active}")
 

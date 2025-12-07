@@ -35,6 +35,7 @@ class SplitWireApp(Adw.Application):
         self.window: Optional[SplitWireWindow] = None
         self._logger = None
         self._config = None
+        self._debug = False
 
         # Set application name
         GLib.set_application_name("SplitWire-Turkey")
@@ -80,11 +81,7 @@ class SplitWireApp(Adw.Application):
         """Initialize core systems (config, language, logging)."""
         try:
             # Initialize logger first
-            self._logger = init_logger(
-                name="splitwire",
-                console_level="INFO",
-                file_level="DEBUG"
-            )
+            self._logger = init_logger(debug=self._debug)
             self._logger.info("SplitWire-Turkey starting...")
 
             # Initialize config
@@ -92,12 +89,12 @@ class SplitWireApp(Adw.Application):
             config = self._config.load()
             self._logger.info(f"Config loaded: theme={config.theme}, language={config.language}")
 
-            # Initialize language
-            init_language_manager(language=config.language.value)
-            self._logger.info(f"Language initialized: {config.language.value}")
+            # Initialize language (config stores strings, not enums)
+            init_language_manager(language=config.language)
+            self._logger.info(f"Language initialized: {config.language}")
 
             # Apply theme
-            self._apply_theme(config.theme.value)
+            self._apply_theme(config.theme)
 
         except Exception as e:
             print(f"Error initializing core systems: {e}", file=sys.stderr)
@@ -253,22 +250,21 @@ class SplitWireApp(Adw.Application):
 
         # Save to config
         if self._config:
-            from splitwire.core import Theme
             config = self._config.load()
-            config.theme = Theme(theme)
-            self._config.save(config)
+            config.theme = theme  # Store as string, not enum
+            self._config.save()
 
     def set_language(self, language: str):
         """Set the application language."""
-        from splitwire.core import set_language, Language
+        from splitwire.core import set_language
 
         set_language(language)
 
         # Save to config
         if self._config:
             config = self._config.load()
-            config.language = Language(language)
-            self._config.save(config)
+            config.language = language  # Store as string, not enum
+            self._config.save()
 
         # Refresh UI
         if self.window:

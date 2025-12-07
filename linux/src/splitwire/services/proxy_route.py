@@ -356,6 +356,30 @@ class ProxyRouteService(BaseService):
         self._config.proxy_port = port
         self._save_config()
 
+    def configure(self, apps: Optional[list[str]] = None,
+                  include_browsers: bool = False,
+                  proxy_host: Optional[str] = None,
+                  proxy_port: Optional[int] = None) -> bool:
+        """
+        Configure proxy routing (wrapper for install).
+
+        Args:
+            apps: List of app names or paths to route
+            include_browsers: Include common browsers
+            proxy_host: SOCKS5 proxy host
+            proxy_port: SOCKS5 proxy port
+
+        Returns:
+            True if configuration successful
+        """
+        return self.install(
+            apps=apps,
+            include_browsers=include_browsers,
+            proxy_host=proxy_host or self._config.proxy_host,
+            proxy_port=proxy_port or self._config.proxy_port,
+            method=self._config.method
+        )
+
     def run_app_through_proxy(self, app_path: str, args: Optional[list[str]] = None) -> bool:
         """
         Run an application through the proxy.

@@ -112,7 +112,7 @@ class ByeDPIPage(BasePage):
             first_preset = BYEDPI_PRESETS.get(preset_names[0])
             if first_preset:
                 buffer = self._entry_params.get_buffer()
-                buffer.set_text(first_preset.get("params", ""))
+                buffer.set_text(first_preset.args or "")
 
         scroll = Gtk.ScrolledWindow(
             child=self._entry_params,
@@ -248,8 +248,8 @@ class ByeDPIPage(BasePage):
 
         if selected < len(preset_names):
             preset_name = preset_names[selected]
-            preset = BYEDPI_PRESETS.get(preset_name, {})
-            params = preset.get("params", "")
+            preset = BYEDPI_PRESETS.get(preset_name)
+            params = preset.args if preset else ""
 
             buffer = self._entry_params.get_buffer()
             buffer.set_text(params)

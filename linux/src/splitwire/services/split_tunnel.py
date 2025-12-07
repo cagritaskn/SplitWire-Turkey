@@ -424,6 +424,26 @@ class SplitTunnelService(BaseService):
         self._config.include_browsers = include
         self._save_config()
 
+    def configure(self, apps: Optional[list[str]] = None,
+                  include_browsers: bool = False,
+                  interface: str = "splitwire") -> bool:
+        """
+        Configure split tunneling (wrapper for install).
+
+        Args:
+            apps: List of app names or paths to tunnel
+            include_browsers: Include common browsers
+            interface: Network interface to route through
+
+        Returns:
+            True if configuration successful
+        """
+        return self.install(
+            apps=apps,
+            include_browsers=include_browsers,
+            interface=interface
+        )
+
     def run_app_through_tunnel(self, app_path: str, args: Optional[list[str]] = None) -> bool:
         """
         Run an application through the tunnel using cgproxy.

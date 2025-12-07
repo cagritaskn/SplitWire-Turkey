@@ -42,12 +42,17 @@ class SplitWireWindow(Adw.ApplicationWindow):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
 
+        # Header bar with window controls
+        header_bar = Adw.HeaderBar()
+        header_bar.set_title_widget(Gtk.Label(label="SplitWire-Turkey"))
+        main_box.append(header_bar)
+
         # Toast overlay for notifications
         self._toast_overlay = Adw.ToastOverlay()
         main_box.append(self._toast_overlay)
 
         # Content box inside toast overlay
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
         self._toast_overlay.set_child(content_box)
 
         # Header with logo
@@ -86,7 +91,10 @@ class SplitWireWindow(Adw.ApplicationWindow):
             valign=Gtk.Align.CENTER,
             tooltip_text=get_text("settings", "theme"),
         )
-        self._theme_toggle.connect("state-set", self._on_theme_toggled)
+        # Set initial state based on current theme
+        self._init_theme_toggle()
+        # Use notify::active instead of state-set for reliable toggle handling
+        self._theme_toggle.connect("notify::active", self._on_theme_toggled)
         
         theme_box = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
@@ -316,13 +324,24 @@ class SplitWireWindow(Adw.ApplicationWindow):
         if page and hasattr(page, 'refresh'):
             page.refresh()
 
-    def _on_theme_toggled(self, switch: Gtk.Switch, state: bool) -> bool:
+    def _init_theme_toggle(self):
+        """Initialize theme toggle state from config."""
+        from splitwire.core import get_config_manager
+        try:
+            config = get_config_manager().load()
+            # Switch ON = dark mode
+            is_dark = config.theme == "dark"
+            self._theme_toggle.set_active(is_dark)
+        except Exception:
+            pass
+
+    def _on_theme_toggled(self, switch: Gtk.Switch, pspec) -> None:
         """Handle theme toggle."""
         app = self.get_application()
         if app:
-            theme = "dark" if state else "light"
+            is_active = switch.get_active()
+            theme = "dark" if is_active else "light"
             app.set_theme(theme)
-        return False
 
     def _on_language_selected(self, action, param):
         """Handle language selection."""

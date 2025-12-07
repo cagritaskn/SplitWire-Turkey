@@ -179,7 +179,7 @@ class WireGuardService(BaseService):
                 self.stop()
 
             # Remove config file
-            if self._config_file.exists():
+            if self._check_config_exists():
                 result = self._run_privileged(["rm", "-f", str(self._config_file)])
                 if not result.success:
                     self._logger.warning(f"Failed to remove config: {result.stderr}")
@@ -196,7 +196,13 @@ class WireGuardService(BaseService):
         """Start WireGuard VPN connection."""
         self._logger.info("Starting WireGuard VPN")
 
-        if not self._config_file.exists():
+        # Check if already running
+        if self.is_running():
+            self._logger.info("WireGuard VPN already running")
+            return True
+
+        # Check config file exists (use shell to avoid permission issues)
+        if not self._check_config_exists():
             self._logger.error("Config file not found")
             return False
 
@@ -247,17 +253,21 @@ class WireGuardService(BaseService):
         else:
             return ServiceStatus.STOPPED
 
-    def is_installed(self) -> bool:
-        """Check if WireGuard config is installed."""
+    def _check_config_exists(self) -> bool:
+        """Check if config file exists (handles permission issues)."""
         try:
             return self._config_file.exists()
         except PermissionError:
-            # Can't check directly, try via shell
+            # Can't check directly, try via shell with sudo
             result = self._shell.run(
-                ["test", "-f", str(self._config_file)],
+                ["sudo", "test", "-f", str(self._config_file)],
                 timeout=5
             )
             return result.success
+
+    def is_installed(self) -> bool:
+        """Check if WireGuard config is installed."""
+        return self._check_config_exists()
 
     def get_info(self) -> ServiceInfo:
         """Get comprehensive service information."""
@@ -637,6 +647,103 @@ class WireGuardService(BaseService):
                         interface.transfer_tx = int(float(match.group(2)) * 1024 * 1024)
 
         return interface
+
+    # =========================================================================
+    # Stub methods for UI compatibility
+    # =========================================================================
+
+    def register_wgcf(self) -> bool:
+        """
+        Register WGCF/WARP account.
+        Alias for register_warp_account() for UI compatibility.
+        """
+        return self.register_warp_account()
+
+    def enable_refresh_timer(self) -> bool:
+        """
+        Enable connection refresh timer.
+        Note: Not fully implemented for Linux yet.
+        """
+        self._logger.info("Refresh timer enabled (stub)")
+        # TODO: Implement systemd timer for connection refresh
+        return True
+
+    def disable_refresh_timer(self) -> bool:
+        """
+        Disable connection refresh timer.
+        Note: Not fully implemented for Linux yet.
+        """
+        self._logger.info("Refresh timer disabled (stub)")
+        return True
+
+    def generate_config(self, allowed_apps: Optional[list[str]] = None,
+                       include_browsers: bool = False,
+                       endpoint: Optional[str] = None) -> Optional[str]:
+        """
+        Generate WireGuard configuration and install it.
+
+        Args:
+            allowed_apps: List of apps to tunnel
+            include_browsers: Include browser apps
+            endpoint: Endpoint type (e.g., "alternative" for alternate servers)
+
+        Returns:
+            Path to generated config file or None
+        """
+        self._logger.info(f"Generating WireGuard config (endpoint={endpoint})...")
+
+        # Generate WARP profile
+        if not self.generate_warp_profile():
+            return None
+
+        # Read the generated profile
+        try:
+            config_content = WGCF_PROFILE_FILE.read_text()
+
+            # Modify config
+            config_content = self._modify_allowed_ips(config_content)
+            config_content = self._add_dns_config(config_content)
+
+            # Install to /etc/wireguard/
+            if self._install_config(config_content):
+                return str(self._config_file)
+            else:
+                self._logger.error("Failed to install config")
+                return None
+
+        except Exception as e:
+            self._logger.error(f"Failed to generate config: {e}")
+            return None
+
+    def generate_config_content(self, allowed_apps: Optional[list[str]] = None,
+                                include_browsers: bool = False) -> str:
+        """
+        Generate WireGuard configuration content as string.
+
+        Args:
+            allowed_apps: List of apps to tunnel
+            include_browsers: Include browser apps
+
+        Returns:
+            Configuration file content as string
+        """
+        self._logger.info("Generating WireGuard config content...")
+
+        # Ensure profile exists
+        if not WGCF_PROFILE_FILE.exists():
+            if not self.generate_warp_profile():
+                return ""
+
+        # Read and return the config
+        try:
+            config = WGCF_PROFILE_FILE.read_text()
+            # Apply modifications
+            config = self._modify_allowed_ips(config)
+            config = self._add_dns_config(config)
+            return config
+        except Exception as e:
+            self._logger.error(f"Failed to read config: {e}")
+            return ""
 
 
 # Convenience functions

@@ -54,14 +54,14 @@ class SettingsPage(BasePage):
 
         # Set current language
         config = get_config()
-        current_lang = config.language.value if config else "tr"
+        current_lang = config.language if config else "tr"
         for i, (code, name, flag) in enumerate(languages):
             if code == current_lang:
                 lang_row.set_selected(i)
                 break
 
         lang_row.connect("notify::selected", self._on_language_changed)
-        lang_row.set_data("languages", languages)
+        self._languages = languages  # Store in instance variable (GTK4 compatible)
         self._lang_row = lang_row
         appearance_group.add(lang_row)
 
@@ -81,14 +81,14 @@ class SettingsPage(BasePage):
         theme_row.set_model(theme_model)
 
         # Set current theme
-        current_theme = config.theme.value if config else "system"
+        current_theme = config.theme if config else "system"
         for i, (code, name) in enumerate(themes):
             if code == current_theme:
                 theme_row.set_selected(i)
                 break
 
         theme_row.connect("notify::selected", self._on_theme_changed)
-        theme_row.set_data("themes", themes)
+        self._themes = themes  # Store in instance variable (GTK4 compatible)
         self._theme_row = theme_row
         appearance_group.add(theme_row)
 
@@ -193,14 +193,14 @@ class SettingsPage(BasePage):
         ]
         theme_model = Gtk.StringList.new([name for code, name in themes])
         self._theme_row.set_model(theme_model)
-        self._theme_row.set_data("themes", themes)
+        self._themes = themes  # Store in instance variable (GTK4 compatible)
 
     # Event handlers
 
     def _on_language_changed(self, row, param):
         """Handle language selection change."""
         selected = row.get_selected()
-        languages = row.get_data("languages")
+        languages = self._languages  # Use instance variable (GTK4 compatible)
 
         if selected < len(languages):
             code, name, flag = languages[selected]
@@ -212,7 +212,7 @@ class SettingsPage(BasePage):
     def _on_theme_changed(self, row, param):
         """Handle theme selection change."""
         selected = row.get_selected()
-        themes = row.get_data("themes")
+        themes = self._themes  # Use instance variable (GTK4 compatible)
 
         if selected < len(themes):
             code, name = themes[selected]

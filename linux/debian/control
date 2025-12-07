@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: SplitWire Team <splitwire@example.com>
 Build-Depends: debhelper-compat (= 13),
                dh-python,
+               pybuild-plugin-pyproject,
                python3-all,
                python3-setuptools,
                python3-gi,

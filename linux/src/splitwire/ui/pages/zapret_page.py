@@ -133,7 +133,8 @@ class ZapretPage(BasePage):
             first_preset = DEFAULT_PRESETS.get(preset_names[0])
             if first_preset:
                 buffer = self._txt_params.get_buffer()
-                buffer.set_text(first_preset.params)
+                # Use nfqws_args as default (primary mode)
+                buffer.set_text(first_preset.nfqws_args or first_preset.tpws_args or "")
 
         scroll = Gtk.ScrolledWindow(
             child=self._txt_params,
@@ -292,7 +293,8 @@ class ZapretPage(BasePage):
             preset = DEFAULT_PRESETS.get(preset_name)
             if preset:
                 buffer = self._txt_params.get_buffer()
-                buffer.set_text(preset.params)
+                # Use nfqws_args as default (primary mode)
+                buffer.set_text(preset.nfqws_args or preset.tpws_args or "")
 
     def _on_install_service(self, button):
         """Handle install service button."""
