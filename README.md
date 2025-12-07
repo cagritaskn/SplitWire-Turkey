@@ -211,6 +211,39 @@ SplitWire-Turkey şuan için yalnızca Windows işletim sistemi için desteklenm
 
 ---
 
+## SplitWire-Turkey Linux Sürümü
+
+Linux sürümü aktif olarak geliştirilmektedir. Detaylı bilgi için [linux/README.md](linux/README.md) dosyasına bakabilirsiniz.
+
+### Desteklenen Dağıtımlar
+- Ubuntu 22.04+
+- Debian 12+
+- Linux Mint 21+
+- Pop!_OS 22.04+
+
+### Linux Özellikleri
+- **WireGuard VPN** - Cloudflare WARP ile ayrık tünelleme
+- **Zapret** - nfqws ile DPI aşımı (GoodbyeDPI Linux karşılığı)
+- **ByeDPI** - ciadpi ile uygulama bazlı proxy
+- **Modern GTK4/Libadwaita** arayüzü
+- **systemd** entegrasyonu
+
+### Linux Kurulumu
+
+```bash
+# Hızlı kurulum
+curl -sSL https://raw.githubusercontent.com/cagritaskn/SplitWire-Turkey/main/linux/scripts/install.sh | sudo bash
+
+# Veya manuel kurulum
+cd linux
+sudo ./scripts/setup-deps.sh
+sudo ./scripts/install.sh
+```
+
+Detaylı kurulum ve kullanım bilgileri için: [Linux README (EN)](linux/README.md) | [Linux README (TR)](linux/README_TR.md)
+
+---
+
 ## Karşılaşılabilecek Sorunlar ve Hata Bildirimi
 - "Register failed"/"Config dosyası bulunamadı" hatası: Bazı internet sağlayıcıları ya da CloudFlare'in kendisi, ücretsiz API'sinin kullanımını çeşitli sebeplerle engelleyebiliyor. Bunun en sık görülen sebebi "abusive usage" olarak tanımlanan bölgesel aşırı kullanma istismarıdır. Bu sebeple wgcf, kayıt gerçekleştiremez ve konfigürasyon dosyası oluşturamaz ve bunun sonucunda "Register işlemi başarısız oldu. Return code: 1" hatası alınır. Böyle bir durumda maalesef Standart Kurulum, Alternatif Kurulum ve Özelleştirilmiş Kurulum yöntemleri işlevini yerine getiremez ve gerekli konfigürasyon dosyası oluşturulamaz. Geçici olarak bir VPN ya da proxy kullanılarak bu yasak aşılabilse dahi; Cloudflare API'sinden geçici olarak tünellenmiş şekilde oluşturulan private-key ve konfigürasyon dosyası, yalnızca tünellenilmiş haldeki makine için geçerli olacağından kullanıma yine engel olacaktır. Bu hatayı alıyorsanız diğer yöntemleri kullanmayı deneyebilirsiniz.
 
