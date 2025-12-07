@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=SplitWire-Turkey
+Comment=Network restriction bypass tool for Linux
+Comment[tr]=Linux için ağ kısıtlaması bypass aracı
+Comment[ru]=Инструмент обхода сетевых ограничений для Linux
+Comment[es]=Herramienta de bypass de restricciones de red para Linux
+Exec=splitwire
+Icon=com.splitwire.turkey
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+Keywords=vpn;wireguard;dpi;bypass;discord;dns;proxy;
+StartupNotify=true
+StartupWMClass=splitwire

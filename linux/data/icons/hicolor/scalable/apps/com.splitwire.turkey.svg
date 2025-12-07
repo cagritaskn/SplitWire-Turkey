@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#027ac4;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0056b3;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#bgGradient)" />
+  
+  <!-- Wire/split symbol -->
+  <g fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Central vertical line -->
+    <line x1="64" y1="30" x2="64" y2="98" />
+    
+    <!-- Left branch -->
+    <path d="M 64 50 Q 40 50 35 70" />
+    <circle cx="35" cy="75" r="6" fill="white" stroke="none" />
+    
+    <!-- Right branch -->
+    <path d="M 64 50 Q 88 50 93 70" />
+    <circle cx="93" cy="75" r="6" fill="white" stroke="none" />
+    
+    <!-- Top node -->
+    <circle cx="64" cy="30" r="8" fill="white" stroke="none" />
+    
+    <!-- Bottom node -->
+    <circle cx="64" cy="98" r="8" fill="white" stroke="none" />
+  </g>
+  
+  <!-- Shield outline -->
+  <path d="M 64 18 L 100 32 L 100 64 Q 100 96 64 110 Q 28 96 28 64 L 28 32 Z" 
+        fill="none" stroke="white" stroke-width="3" opacity="0.3" />
+</svg>

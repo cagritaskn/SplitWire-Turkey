@@ -184,31 +184,12 @@ def run_gui(args: argparse.Namespace) -> int:
         print("Alternatively, run in CLI mode: splitwire --cli")
         return 1
 
-    # TODO: Import and run actual GUI application
-    # from splitwire.ui import SplitWireApp
-    # app = SplitWireApp()
-    # return app.run(sys.argv[:1])
+    # Import and run the GTK4 application
+    from splitwire.application import SplitWireApp
 
-    # Placeholder until GUI is implemented
-    logger.info("GUI mode not yet implemented - Phase 4")
-    print("SplitWire-Turkey Linux")
-    print("=" * 40)
-    print("GUI mode is not yet implemented.")
-    print("This will be added in Phase 4 of development.")
-    print("")
-    print("Available options:")
-    print("  --check-deps    Check system dependencies")
-    print("  --check-system  Show system information")
-    print("  --install-deps  Install missing dependencies")
-    print("  --version       Show version information")
-    print("")
-    print("For now, you can test the core components:")
-    print("  python -m splitwire.core.config")
-    print("  python -m splitwire.core.logger")
-    print("  python -m splitwire.utils.system")
-    print("  python -m splitwire.utils.deps")
-
-    return 0
+    logger.info("Launching GTK4 GUI")
+    app = SplitWireApp()
+    return app.run(sys.argv[:1])
 
 
 def run_cli(args: argparse.Namespace) -> int:

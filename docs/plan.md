@@ -710,145 +710,71 @@ linux/
 
 ---
 
-## Phase 7: GTK4 GUI
+## Phase 7: GTK4 GUI ✅
 
 **Objective**: Complete GUI matching Windows functionality
 **Complexity**: High
 **Dependencies**: Phase 2, 3, 4, 5, 6
+**Status**: Complete
 
 ### Tasks
 
-- [ ] 7.1 Application skeleton
+- [x] 7.1 Application skeleton
   - Files: `linux/src/splitwire/application.py`, `linux/src/splitwire/__main__.py`
-  - Details:
-    ```python
-    import gi
-    gi.require_version('Gtk', '4.0')
-    gi.require_version('Adw', '1')
-    from gi.repository import Gtk, Adw, Gio
+  - **Implementation**: `SplitWireApp(Adw.Application)` with theme/language management, actions, notifications
 
-    class SplitWireApp(Adw.Application):
-        def __init__(self):
-            super().__init__(application_id='com.splitwire.turkey')
-
-        def do_activate(self):
-            win = SplitWireWindow(application=self)
-            win.present()
-    ```
-
-- [ ] 7.2 Main Window with navigation
+- [x] 7.2 Main Window with navigation
   - Files: `linux/src/splitwire/ui/window.py`
-  - Details:
-    - Adw.ApplicationWindow
-    - Adw.NavigationSplitView (sidebar + content)
-    - Header bar with logo, language selector, theme toggle
-    - Status bar showing active services
+  - **Implementation**: `SplitWireWindow(Adw.ApplicationWindow)` with ViewSwitcher navigation, toast overlay, status bar
 
-- [ ] 7.3 WireSock Page
-  - Files: `linux/src/splitwire/ui/pages/wiresock.py`
-  - Widgets:
-    - Status indicator (active/inactive)
-    - "WS Standart Kurulum" button
-    - "WS Alternatif Kurulum" button (if applicable)
-    - "Tarayıcılar için de tünelleme yap" switch
-    - "WireSock yineleyici kur" switch
-    - App list for custom tunneling (Adw.ExpanderRow)
-    - "Klasör Ekle" / "Listeyi Temizle" buttons
-    - "Özel Kurulum" / "Özel Config Oluştur" buttons
-    - Service remove button
+- [x] 7.3 WireSock Page (Main Page)
+  - Files: `linux/src/splitwire/ui/pages/main_page.py`
+  - **Implementation**: Full WireGuard/WGCF setup with split tunneling, browser tunneling switch, refresh timer, custom app list
 
-- [ ] 7.4 ByeDPI Page
-  - Files: `linux/src/splitwire/ui/pages/byedpi.py`
-  - Widgets:
-    - Status indicator
-    - "ByeDPI Split Tunneling Kurulum" button
-    - "Tarayıcılar için de tünelleme yap" switch
-    - "ByeDPI'ı Kaldır" button
+- [x] 7.4 ByeDPI Page
+  - Files: `linux/src/splitwire/ui/pages/byedpi_page.py`
+  - **Implementation**: ByeDPI proxy setup with presets, browser tunneling, custom parameters
 
-- [ ] 7.5 Zapret Page
-  - Files: `linux/src/splitwire/ui/pages/zapret.py`
-  - Widgets:
-    - Status indicator
-    - "Zapret Otomatik Kurulum" button
-    - Scan speed selector (Adw.ComboRow): Hızlı/Standart/Tam
-    - Preset dropdown (Adw.ComboRow)
-    - "Hazır Ayarı Düzenle" expander with text editor
-    - "Önayarlı Hizmet Kur" button
-    - "Önayarlı Tek Seferlik" button
-    - "Zapret'i Kaldır" button
+- [x] 7.5 Zapret Page
+  - Files: `linux/src/splitwire/ui/pages/zapret_page.py`
+  - **Implementation**: Blockcheck integration, scan modes, presets, custom params, service install
 
-- [ ] 7.6 GoodbyeDPI Page
-  - Files: `linux/src/splitwire/ui/pages/goodbyedpi.py`
-  - Widgets:
-    - Status indicator
-    - Preset dropdown
-    - "Hazır Ayarı Düzenle" expander
-    - "Blacklist Kullan" switch
-    - "Blacklisti Düzenle" expander with text editor
-    - "Hizmet Kur" button
-    - "Tek Seferlik" button
-    - "GoodbyeDPI'ı Kaldır" button
+- [x] 7.6 GoodbyeDPI Page
+  - Files: `linux/src/splitwire/ui/pages/goodbyedpi_page.py`
+  - **Implementation**: nfqws-based DPI bypass, presets, blacklist support
 
-- [ ] 7.7 Repair Page (Onarım)
-  - Files: `linux/src/splitwire/ui/pages/repair.py`
-  - Widgets:
-    - Discord status cards (installed versions)
-    - "Discord'u Onar" button
-    - "Discord PTB Yükle" button
-    - "WebCord Yükle" button
-    - "Discord PTB için temiz kurulum yap" switch
-    - "WebCord için kısayol oluştur" switch
-    - Launch/uninstall buttons for each version
+- [x] 7.7 Repair Page (Onarım)
+  - Files: `linux/src/splitwire/ui/pages/repair_page.py`
+  - **Implementation**: Discord repair, PTB install, WebCord install, status indicators
 
-- [ ] 7.8 Advanced Page (Gelişmiş)
-  - Files: `linux/src/splitwire/ui/pages/advanced.py`
-  - Widgets:
-    - Services list with status (Adw.PreferencesGroup)
-    - "DNS ve DoH ayarlarını her kurulumda gerçekleştir" switch
-    - "Tüm Hizmetleri Kaldır" button
-    - "DNS ve DoH Ayarlarını Geri Al" button
-    - "SplitWire-Turkey'i Kaldır" button
+- [x] 7.8 Advanced Page (Gelişmiş)
+  - Files: `linux/src/splitwire/ui/pages/advanced_page.py`
+  - **Implementation**: Service management, DNS reset, uninstall, logs access
 
-- [ ] 7.9 Settings Page (Ayarlar)
-  - Files: `linux/src/splitwire/ui/pages/settings.py`
-  - Widgets:
-    - Language selector with flags (Adw.ComboRow)
-    - Theme selector: System/Light/Dark (Adw.ComboRow)
-    - About section:
-      - Version info
-      - GitHub link
-      - Patreon link
-    - "Logs Klasörünü Aç" button
+- [x] 7.9 Settings Page (Ayarlar)
+  - Files: `linux/src/splitwire/ui/pages/settings_page.py`
+  - **Implementation**: Language selector, theme selector, DNS settings, about section, update check
 
-- [ ] 7.10 Common widgets
-  - Files: `linux/src/splitwire/ui/widgets/`
-  - Details:
-    - ServiceStatusRow - shows service name + status indicator
-    - PresetSelector - dropdown with edit button
-    - AppSelector - list of apps with checkboxes
-    - LogViewer - scrollable text view for logs
+- [x] 7.10 Common widgets
+  - Files: `linux/src/splitwire/ui/pages/base_page.py`, `linux/src/splitwire/ui/widgets/`
+  - **Implementation**: BasePage with helper methods for buttons, switches, combos, status indicators
 
-- [ ] 7.11 Desktop integration
-  - Files: `linux/data/splitwire.desktop`, `linux/data/icons/`
-  - Details:
-    - .desktop file for app launcher
-    - SVG icons (regular + symbolic)
-    - Language flag icons
+- [x] 7.11 Desktop integration
+  - Files: `linux/data/com.splitwire.turkey.desktop`, `linux/data/icons/hicolor/scalable/apps/com.splitwire.turkey.svg`
+  - **Implementation**: Desktop file with translations, SVG icon
 
-- [ ] 7.12 Notifications
-  - Details:
-    - Success/error notifications using Gio.Notification
-    - Service status change notifications
+- [x] 7.12 Notifications
+  - **Implementation**: Toast notifications via Adw.Toast, desktop notifications via Gio.Notification
 
 ### Acceptance Criteria
 
-- [ ] All pages accessible and functional
-- [ ] All Windows features have equivalent UI
-- [ ] Service status correctly displayed
-- [ ] Language switching works
-- [ ] Theme switching works
-- [ ] Keyboard navigation works
-- [ ] App looks native on Ubuntu/GNOME
+- [x] All pages accessible and functional
+- [x] All Windows features have equivalent UI
+- [x] Service status correctly displayed
+- [x] Language switching works
+- [x] Theme switching works
+- [x] Keyboard navigation works
+- [x] App looks native on Ubuntu/GNOME
 
 ---
 
