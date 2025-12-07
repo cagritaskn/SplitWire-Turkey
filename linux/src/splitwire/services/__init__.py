@@ -10,6 +10,7 @@ This package contains service managers for:
 - Proxy routing (Phase 4)
 - DNS management with DoH support (Phase 5)
 - Discord repair and alternative clients (Phase 6)
+- systemd service management (Phase 8)
 """
 
 from .base import (
@@ -95,6 +96,16 @@ from .discord import (
     get_discord_service,
 )
 
+from .systemd import (
+    SystemdManager,
+    SystemdUnitType,
+    SystemdActiveState,
+    SystemdEnabledState,
+    SystemdUnitStatus,
+    JournalEntry,
+    get_systemd_manager,
+)
+
 __all__ = [
     # base
     "BaseService",
@@ -161,4 +172,12 @@ __all__ = [
     "InstallMethod",
     "RepairResult",
     "get_discord_service",
+    # systemd
+    "SystemdManager",
+    "SystemdUnitType",
+    "SystemdActiveState",
+    "SystemdEnabledState",
+    "SystemdUnitStatus",
+    "JournalEntry",
+    "get_systemd_manager",
 ]

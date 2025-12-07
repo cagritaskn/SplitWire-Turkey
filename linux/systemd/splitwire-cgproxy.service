@@ -1,28 +1,62 @@
 [Unit]
-Description=SplitWire-Turkey cgproxy for Split Tunneling
+Description=SplitWire-Turkey cgproxy App Routing
 Documentation=https://github.com/cagritaskn/SplitWire-Turkey
-After=network-online.target splitwire-wg.service
+Documentation=https://github.com/springzfx/cgproxy
+After=network-online.target splitwire-byedpi.service
 Wants=network-online.target
-BindsTo=splitwire-wg.service
+BindsTo=splitwire-byedpi.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/cgproxyd
-ExecReload=/bin/kill -HUP $MAINPID
 
-# Restart configuration
-Restart=on-failure
-RestartSec=5
+# Configuration
+Environment=CGPROXY_CONFIG=/etc/splitwire/cgproxy.json
+Environment=CGROUP_NAME=splitwire.slice
 
-# Capabilities needed for cgroup and network control
-AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
+# Pre-start: Setup cgroup and iptables
+ExecStartPre=/bin/bash -c '\
+    # Ensure cgroup exists \
+    mkdir -p /sys/fs/cgroup/net_cls/splitwire 2>/dev/null || true; \
+    # Set cgroup classid for identification \
+    echo 0x10001 > /sys/fs/cgroup/net_cls/splitwire/net_cls.classid 2>/dev/null || true; \
+    # Add iptables rules to mark traffic from our cgroup \
+    iptables -t mangle -N SPLITWIRE_CGPROXY 2>/dev/null || true; \
+    iptables -t mangle -F SPLITWIRE_CGPROXY; \
+    iptables -t mangle -A SPLITWIRE_CGPROXY -m cgroup --cgroup 0x10001 -j MARK --set-mark 0x1; \
+    iptables -t mangle -C OUTPUT -j SPLITWIRE_CGPROXY 2>/dev/null || \
+    iptables -t mangle -A OUTPUT -j SPLITWIRE_CGPROXY; \
+    # Add routing rule for marked packets \
+    ip rule add fwmark 0x1 table 100 2>/dev/null || true; \
+    ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true'
 
-# Security (limited due to network requirements)
+# Start cgproxy daemon
+ExecStart=/usr/bin/cgproxy --config ${CGPROXY_CONFIG}
+
+# Stop: Clean up iptables and routing
+ExecStop=/bin/bash -c '\
+    # Remove iptables rules \
+    iptables -t mangle -D OUTPUT -j SPLITWIRE_CGPROXY 2>/dev/null || true; \
+    iptables -t mangle -F SPLITWIRE_CGPROXY 2>/dev/null || true; \
+    iptables -t mangle -X SPLITWIRE_CGPROXY 2>/dev/null || true; \
+    # Remove routing rules \
+    ip rule del fwmark 0x1 table 100 2>/dev/null || true; \
+    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true'
+
+# Security hardening
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/sys/fs/cgroup /etc/cgproxy
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Required paths
+ReadWritePaths=/sys/fs/cgroup /var/run
+ReadOnlyPaths=/etc/splitwire
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

@@ -1,32 +1,50 @@
 [Unit]
-Description=SplitWire ByeDPI Proxy Service
+Description=SplitWire-Turkey ByeDPI Proxy
+Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 Documentation=https://github.com/hufrea/byedpi
-After=network-online.target
+After=network-online.target nss-lookup.target
 Wants=network-online.target
+Before=splitwire-cgproxy.service
 
 [Service]
 Type=simple
-ExecStart=/opt/byedpi/ciadpi -i 127.0.0.1 -p 1080 --disorder 1 --auto=torst --tlsrec 1+s
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=5
 
-# Run as root (needed for some DPI bypass methods)
-User=root
+# Configuration
+Environment=BYEDPI_BIN=/opt/splitwire/ciadpi
+Environment=BYEDPI_PORT=1080
+Environment=BYEDPI_OPT=--disorder 1 --split 1 --oob 1 --fake -1
+
+# Start ciadpi (ByeDPI Linux binary)
+ExecStart=/bin/bash -c '\
+    ${BYEDPI_BIN} \
+        --ip 127.0.0.1 \
+        --port ${BYEDPI_PORT} \
+        ${BYEDPI_OPT}'
 
 # Security hardening
-NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictNamespaces=yes
-RestrictRealtime=yes
-MemoryDenyWriteExecute=no
+NoNewPrivileges=yes
 
-# Allow network access
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Only needs network access
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=
+
+# Restrict system calls
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Required paths
+ReadOnlyPaths=/opt/splitwire
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

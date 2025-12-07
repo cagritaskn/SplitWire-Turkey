@@ -1,35 +1,65 @@
 [Unit]
-Description=SplitWire Zapret DPI Bypass Service
+Description=SplitWire-Turkey Zapret DPI Bypass
+Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 Documentation=https://github.com/bol-van/zapret
-After=network-online.target
+After=network-online.target nss-lookup.target
 Wants=network-online.target
 
 [Service]
 Type=forking
-Environment=PYTHONPATH=/opt/splitwire/lib/python
+PIDFile=/var/run/splitwire-zapret.pid
 
-# Start zapret with saved configuration
-ExecStart=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; svc = get_zapret_service(); exit(0 if svc.start() else 1)"
+# Configuration directory
+Environment=ZAPRET_BASE=/opt/zapret
+Environment=NFQWS_OPT=--qnum=200 --dpi-desync=fake,split --dpi-desync-ttl=3
+Environment=BLACKLIST=/etc/splitwire/blacklist.txt
 
-# Stop zapret and remove iptables rules
-ExecStop=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; get_zapret_service().stop()"
+# Pre-start: Setup iptables rules for NFQUEUE
+ExecStartPre=/bin/bash -c '\
+    # Add iptables rules to redirect traffic to NFQUEUE \
+    iptables -t mangle -N SPLITWIRE_ZAPRET 2>/dev/null || true; \
+    iptables -t mangle -F SPLITWIRE_ZAPRET; \
+    iptables -t mangle -A SPLITWIRE_ZAPRET -p tcp --dport 443 -j NFQUEUE --queue-num 200 --queue-bypass; \
+    iptables -t mangle -A SPLITWIRE_ZAPRET -p tcp --dport 80 -j NFQUEUE --queue-num 200 --queue-bypass; \
+    iptables -t mangle -C POSTROUTING -j SPLITWIRE_ZAPRET 2>/dev/null || \
+    iptables -t mangle -A POSTROUTING -j SPLITWIRE_ZAPRET'
 
-# Cleanup iptables rules on reload
-ExecReload=/usr/bin/python3 -c "from splitwire.services.zapret import get_zapret_service; svc = get_zapret_service(); svc.stop(); svc.start()"
+# Start nfqws
+ExecStart=/bin/bash -c '\
+    OPTS="${NFQWS_OPT}"; \
+    if [ -f "${BLACKLIST}" ]; then \
+        OPTS="$OPTS --hostlist=${BLACKLIST}"; \
+    fi; \
+    ${ZAPRET_BASE}/nfq/nfqws $OPTS --daemon --pidfile=/var/run/splitwire-zapret.pid'
 
-RemainAfterExit=yes
-Restart=on-failure
-RestartSec=10
+# Stop: Remove iptables rules and kill nfqws
+ExecStop=/bin/bash -c '\
+    # Remove iptables rules \
+    iptables -t mangle -D POSTROUTING -j SPLITWIRE_ZAPRET 2>/dev/null || true; \
+    iptables -t mangle -F SPLITWIRE_ZAPRET 2>/dev/null || true; \
+    iptables -t mangle -X SPLITWIRE_ZAPRET 2>/dev/null || true; \
+    # Kill the process \
+    [ -f /var/run/splitwire-zapret.pid ] && kill $(cat /var/run/splitwire-zapret.pid) 2>/dev/null || true; \
+    rm -f /var/run/splitwire-zapret.pid'
+
+# Reload: Just restart nfqws with new params
+ExecReload=/bin/kill -HUP $MAINPID
 
 # Security hardening
-NoNewPrivileges=no
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/run/splitwire /home
-PrivateTmp=true
-
-# Capabilities needed for iptables and netfilter queue
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Required paths
+ReadWritePaths=/var/run /etc/splitwire
+ReadOnlyPaths=/opt/zapret
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

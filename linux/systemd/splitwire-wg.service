@@ -2,25 +2,42 @@
 Description=SplitWire-Turkey WireGuard VPN
 Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 After=network-online.target nss-lookup.target
-Wants=network-online.target nss-lookup.target
+Wants=network-online.target
+Before=splitwire-cgproxy.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/wg-quick up splitwire
-ExecStop=/usr/bin/wg-quick down splitwire
-ExecReload=/bin/bash -c 'wg-quick down splitwire && wg-quick up splitwire'
 
-# Restart configuration
-Restart=on-failure
-RestartSec=5
+# Configuration file location
+Environment=WG_CONF=/etc/wireguard/splitwire.conf
+
+# Pre-start: Ensure WireGuard module is loaded
+ExecStartPre=/sbin/modprobe wireguard
+
+# Start WireGuard interface
+ExecStart=/usr/bin/wg-quick up ${WG_CONF}
+
+# Stop WireGuard interface
+ExecStop=/usr/bin/wg-quick down ${WG_CONF}
+
+# Reload configuration (re-read conf file)
+ExecReload=/bin/bash -c 'wg syncconf splitwire <(wg-quick strip ${WG_CONF})'
 
 # Security hardening
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=no
-ReadWritePaths=/etc/wireguard
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_MODULE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Allow read/write to WireGuard config
+ReadWritePaths=/etc/wireguard /var/run
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

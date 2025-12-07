@@ -1,5 +1,5 @@
 [Unit]
-Description=SplitWire-Turkey WireGuard Periodic Refresh Timer
+Description=SplitWire-Turkey WireGuard Refresh Timer
 Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 
 [Timer]
@@ -7,11 +7,14 @@ Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 OnBootSec=30min
 OnUnitActiveSec=30min
 
-# Randomize slightly to avoid thundering herd
+# Randomize start time slightly to avoid thundering herd
 RandomizedDelaySec=60
 
-# Keep timer running even when laptop is on battery
+# Persist timer across reboots
 Persistent=true
+
+# What unit to trigger
+Unit=splitwire-wg-refresh.service
 
 [Install]
 WantedBy=timers.target

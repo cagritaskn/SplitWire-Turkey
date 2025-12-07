@@ -778,15 +778,16 @@ linux/
 
 ---
 
-## Phase 8: systemd Integration
+## Phase 8: systemd Integration ✅
 
 **Objective**: Service management
 **Complexity**: Medium
 **Dependencies**: Phase 2, 3, 4
+**Status**: Complete
 
 ### Tasks
 
-- [ ] 8.1 systemd manager class
+- [x] 8.1 systemd manager class
   - Files: `linux/src/splitwire/services/systemd.py`
   - Details:
     - Install/remove service unit files
@@ -794,27 +795,42 @@ linux/
     - Start/stop/restart services
     - Check service status
     - Read journal logs
+  - **Implementation**: `SystemdManager` class with comprehensive systemd integration:
+    - `install_unit()`, `remove_unit()`, `unit_exists()` for unit file management
+    - `start()`, `stop()`, `restart()`, `reload()` for lifecycle management
+    - `enable()`, `disable()`, `mask()`, `unmask()` for autostart control
+    - `get_status()`, `is_active()`, `is_enabled()`, `is_failed()` for status monitoring
+    - `get_logs()`, `get_logs_json()`, `follow_logs()` for journal access
+    - `SystemdUnitStatus`, `SystemdActiveState`, `SystemdEnabledState` dataclasses
 
-- [ ] 8.2 Service unit files
+- [x] 8.2 Service unit files
   - Files: `linux/systemd/*.service`, `linux/systemd/*.timer`
   - Details:
     - splitwire-wg.service - WireGuard VPN
-    - splitwire-wg-refresh.timer - WireGuard refresh
-    - splitwire-zapret.service - Zapret nfqws
-    - splitwire-byedpi.service - ByeDPI proxy
-    - splitwire-cgproxy.service - App routing
+    - splitwire-wg-refresh.timer - WireGuard refresh timer (30min)
+    - splitwire-wg-refresh.service - WireGuard refresh service
+    - splitwire-zapret.service - Zapret nfqws with iptables
+    - splitwire-byedpi.service - ByeDPI/ciadpi proxy
+    - splitwire-cgproxy.service - App routing via cgroups
+  - **Implementation**: 6 systemd unit files with security hardening
 
-- [ ] 8.3 Service dependencies
+- [x] 8.3 Service dependencies
   - Details:
     - Correct ordering (network-online.target)
     - Proper After/Requires declarations
+  - **Implementation**:
+    - All services depend on `network-online.target`
+    - `splitwire-wg.service` runs before `splitwire-cgproxy.service`
+    - `splitwire-byedpi.service` runs before `splitwire-cgproxy.service`
+    - `splitwire-cgproxy.service` binds to `splitwire-byedpi.service`
+    - `splitwire-wg-refresh.service` requires `splitwire-wg.service`
 
 ### Acceptance Criteria
 
-- [ ] Services install correctly to /etc/systemd/system/
-- [ ] systemctl commands work
-- [ ] Services start on boot when enabled
-- [ ] Journal logs accessible
+- [x] Services install correctly to /etc/systemd/system/
+- [x] systemctl commands work
+- [x] Services start on boot when enabled
+- [x] Journal logs accessible
 
 ---
 

@@ -1,14 +1,35 @@
 [Unit]
-Description=SplitWire-Turkey WireGuard Refresh
+Description=SplitWire-Turkey WireGuard Connection Refresh
 Documentation=https://github.com/cagritaskn/SplitWire-Turkey
 After=splitwire-wg.service
 Requires=splitwire-wg.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'wg-quick down splitwire && sleep 2 && wg-quick up splitwire'
 
-# Don't restart automatically - timer handles scheduling
+# Configuration
+Environment=WG_CONF=/etc/wireguard/splitwire.conf
+Environment=WG_IFACE=splitwire
+
+# Refresh the WireGuard connection
+# This restarts the interface to get a fresh connection
+ExecStart=/bin/bash -c '\
+    echo "Refreshing WireGuard connection..."; \
+    /usr/bin/wg-quick down ${WG_CONF} 2>/dev/null || true; \
+    sleep 2; \
+    /usr/bin/wg-quick up ${WG_CONF}; \
+    echo "WireGuard connection refreshed"'
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_MODULE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+ReadWritePaths=/etc/wireguard /var/run
+
+# Don't auto-restart, triggered by timer
 Restart=no
 
 [Install]
