@@ -1,0 +1,47 @@
+Source: splitwire-turkey
+Section: net
+Priority: optional
+Maintainer: SplitWire Team <splitwire@example.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all,
+               python3-setuptools,
+               python3-gi,
+               python3-gi-cairo
+Standards-Version: 4.6.2
+Homepage: https://github.com/cagritaskn/SplitWire-Turkey
+Vcs-Browser: https://github.com/cagritaskn/SplitWire-Turkey
+Vcs-Git: https://github.com/cagritaskn/SplitWire-Turkey.git
+Rules-Requires-Root: no
+
+Package: splitwire-turkey
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         python3 (>= 3.10),
+         python3-gi,
+         python3-gi-cairo,
+         gir1.2-gtk-4.0,
+         gir1.2-adw-1,
+         wireguard-tools,
+         iptables,
+         iproute2,
+         curl,
+         wget
+Recommends: libnetfilter-queue1,
+            cgroup-tools
+Suggests: nftables
+Description: Network restriction bypass tool for Linux
+ SplitWire-Turkey is a comprehensive network bypass tool that provides:
+  - WireGuard VPN with split tunneling support
+  - DPI (Deep Packet Inspection) bypass using Zapret/nfqws
+  - ByeDPI proxy for application-specific routing
+  - DNS management with DoH (DNS over HTTPS) support
+  - Discord repair and alternative client installation
+ .
+ Features:
+  - Modern GTK4/Libadwaita interface
+  - Multiple bypass methods (WireGuard, Zapret, ByeDPI)
+  - Split tunneling for specific applications
+  - Multi-language support (Turkish, English, Russian, Spanish)
+  - systemd service integration

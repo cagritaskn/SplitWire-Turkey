@@ -834,74 +834,77 @@ linux/
 
 ---
 
-## Phase 9: Installation & Packaging
+## Phase 9: Installation & Packaging ✅
 
 **Objective**: Easy installation for Ubuntu
 **Complexity**: Medium
 **Dependencies**: Phase 7, 8
+**Status**: Complete
 
 ### Tasks
 
-- [ ] 9.1 Dependency install script
+- [x] 9.1 Dependency install script
   - Files: `linux/scripts/setup-deps.sh`
-  - Details:
-    ```bash
-    #!/bin/bash
-    sudo apt update
-    sudo apt install -y \
-      python3-gi python3-gi-cairo \
-      gir1.2-gtk-4.0 gir1.2-adw-1 \
-      wireguard-tools \
-      libnetfilter-queue-dev \
-      iptables \
-      cgroupfs-mount \
-      curl wget git
-    ```
+  - **Implementation**: Comprehensive dependency installer (7.4KB):
+    - Detects Ubuntu/Debian/Mint/Pop!_OS
+    - Checks version compatibility (Ubuntu 22.04+, Debian 12+)
+    - Installs: python3-gi, GTK4, Libadwaita, WireGuard, iptables, cgroup-tools
+    - Verifies installation with tests
 
-- [ ] 9.2 Main install script
+- [x] 9.2 Main install script
   - Files: `linux/scripts/install.sh`
-  - Details:
+  - **Implementation**: Full installation script (15KB):
     - Check Ubuntu version
     - Run setup-deps.sh
-    - Create venv and install package
-    - Download binaries (wgcf, ciadpi)
-    - Clone and setup zapret
+    - Download WGCF binary from GitHub releases
+    - Download ciadpi (ByeDPI) binary
+    - Clone and build Zapret
+    - Install Python package
     - Copy systemd units
-    - Copy polkit policy
+    - Install polkit policy
     - Copy desktop file and icons
-    - Create /usr/local/bin/splitwire symlink
+    - Create /usr/local/bin/splitwire launcher
+    - Create default config files
+    - Supports --skip-deps, --no-desktop, --dev options
 
-- [ ] 9.3 Uninstall script
+- [x] 9.3 Uninstall script
   - Files: `linux/scripts/uninstall.sh`
-  - Details:
+  - **Implementation**: Complete uninstaller (12KB):
     - Stop and remove all services
     - Restore DNS settings
-    - Restore iptables rules
-    - Remove config files
+    - Clean up iptables rules
+    - Remove WireGuard config
+    - Remove Python package
     - Remove binaries
-    - Remove desktop entry
+    - Remove desktop entry and icons
+    - Remove polkit policy
+    - Supports --keep-config, --keep-zapret, --purge options
 
-- [ ] 9.4 DEB package
+- [x] 9.4 DEB package
   - Files: `linux/debian/`
-  - Details:
-    - control file with dependencies
-    - postinst for setup
-    - postrm for cleanup
-    - Build with dpkg-buildpackage
+  - **Implementation**: Complete Debian packaging:
+    - `control` - Package metadata with dependencies
+    - `rules` - Build rules with pybuild
+    - `changelog` - Version history
+    - `copyright` - MIT license
+    - `postinst` - Post-installation setup
+    - `prerm` - Pre-removal cleanup
+    - `postrm` - Post-removal cleanup (purge support)
+    - `source/format` - Native source format
 
-- [ ] 9.5 One-liner install
-  - Details:
+- [x] 9.5 One-liner install
+  - **Implementation**: Supported via curl pipe:
     ```bash
     curl -sSL https://raw.githubusercontent.com/cagritaskn/SplitWire-Turkey/main/linux/scripts/install.sh | sudo bash
     ```
 
 ### Acceptance Criteria
 
-- [ ] Fresh Ubuntu install works
-- [ ] All dependencies installed
-- [ ] App launches from application menu
-- [ ] Uninstall removes everything
-- [ ] DEB package installs correctly
+- [x] Fresh Ubuntu install works
+- [x] All dependencies installed
+- [x] App launches from application menu
+- [x] Uninstall removes everything
+- [x] DEB package installs correctly
 
 ---
 

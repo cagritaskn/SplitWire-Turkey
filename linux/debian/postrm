@@ -1,0 +1,81 @@
+#!/bin/bash
+# postrm script for splitwire-turkey
+
+set -e
+
+case "$1" in
+    purge)
+        # Remove config directory
+        rm -rf /etc/splitwire
+        
+        # Remove log directory
+        rm -rf /var/log/splitwire
+        
+        # Remove WireGuard config (only splitwire.conf)
+        rm -f /etc/wireguard/splitwire.conf
+        
+        # Remove user data
+        for home_dir in /home/*; do
+            if [ -d "$home_dir" ]; then
+                rm -rf "$home_dir/.config/splitwire" 2>/dev/null || true
+                rm -rf "$home_dir/.cache/splitwire" 2>/dev/null || true
+                rm -rf "$home_dir/.local/share/splitwire" 2>/dev/null || true
+            fi
+        done
+        rm -rf /root/.config/splitwire 2>/dev/null || true
+        rm -rf /root/.cache/splitwire 2>/dev/null || true
+        
+        # Remove splitwire group
+        if getent group splitwire >/dev/null; then
+            groupdel splitwire 2>/dev/null || true
+        fi
+        
+        # Clean up iptables rules
+        if command -v iptables >/dev/null; then
+            iptables -t mangle -D POSTROUTING -j SPLITWIRE_ZAPRET 2>/dev/null || true
+            iptables -t mangle -F SPLITWIRE_ZAPRET 2>/dev/null || true
+            iptables -t mangle -X SPLITWIRE_ZAPRET 2>/dev/null || true
+            
+            iptables -t mangle -D OUTPUT -j SPLITWIRE_CGPROXY 2>/dev/null || true
+            iptables -t mangle -F SPLITWIRE_CGPROXY 2>/dev/null || true
+            iptables -t mangle -X SPLITWIRE_CGPROXY 2>/dev/null || true
+        fi
+        
+        # Remove routing rules
+        ip rule del fwmark 0x1 table 100 2>/dev/null || true
+        ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
+        ;;
+
+    remove)
+        # Disable services
+        for service in splitwire-wg splitwire-wg-refresh splitwire-zapret splitwire-byedpi splitwire-cgproxy; do
+            systemctl disable "${service}.service" 2>/dev/null || true
+            systemctl disable "${service}.timer" 2>/dev/null || true
+        done
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+# Reload systemd
+systemctl daemon-reload 2>/dev/null || true
+
+# Update icon cache
+if command -v gtk-update-icon-cache >/dev/null; then
+    gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
+# Update desktop database
+if command -v update-desktop-database >/dev/null; then
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+
+#DEBHELPER#
+
+exit 0

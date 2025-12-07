@@ -1,0 +1,12 @@
+# Python package - installed by pybuild
+# Systemd units
+lib/systemd/system/*.service
+lib/systemd/system/*.timer
+# Polkit policy
+usr/share/polkit-1/actions/*.policy
+# Desktop entry
+usr/share/applications/*.desktop
+# Icons
+usr/share/icons/hicolor/scalable/apps/*.svg
+# Launcher
+usr/bin/splitwire

@@ -1,0 +1,85 @@
+#!/bin/bash
+# postinst script for splitwire-turkey
+
+set -e
+
+case "$1" in
+    configure)
+        # Create splitwire group if it doesn't exist
+        if ! getent group splitwire >/dev/null; then
+            groupadd --system splitwire
+        fi
+        
+        # Create config directory
+        mkdir -p /etc/splitwire
+        
+        # Create default config if not exists
+        if [ ! -f /etc/splitwire/config.json ]; then
+            cat > /etc/splitwire/config.json << 'CONFIG'
+{
+    "version": "1.0.0",
+    "language": "tr",
+    "theme": "system",
+    "auto_dns": true,
+    "dns_server": "cloudflare",
+    "doh_enabled": true
+}
+CONFIG
+            chmod 644 /etc/splitwire/config.json
+        fi
+        
+        # Create default blacklist if not exists
+        if [ ! -f /etc/splitwire/blacklist.txt ]; then
+            cat > /etc/splitwire/blacklist.txt << 'BLACKLIST'
+discord.com
+discord.gg
+discordapp.com
+discordapp.net
+discord.media
+discordcdn.com
+BLACKLIST
+            chmod 644 /etc/splitwire/blacklist.txt
+        fi
+        
+        # Create log directory
+        mkdir -p /var/log/splitwire
+        chmod 755 /var/log/splitwire
+        
+        # Create WireGuard config directory
+        mkdir -p /etc/wireguard
+        chmod 700 /etc/wireguard
+        
+        # Update icon cache
+        if command -v gtk-update-icon-cache >/dev/null; then
+            gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
+        fi
+        
+        # Update desktop database
+        if command -v update-desktop-database >/dev/null; then
+            update-desktop-database /usr/share/applications 2>/dev/null || true
+        fi
+        
+        # Reload systemd
+        systemctl daemon-reload 2>/dev/null || true
+        
+        echo ""
+        echo "SplitWire-Turkey has been installed!"
+        echo ""
+        echo "To start the application:"
+        echo "  - From terminal: splitwire"
+        echo "  - From application menu: Search for 'SplitWire'"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export PYBUILD_NAME = splitwire
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_install:
+	dh_auto_install
+	
+	# Install systemd units
+	install -d debian/splitwire-turkey/lib/systemd/system
+	install -m 644 systemd/*.service debian/splitwire-turkey/lib/systemd/system/
+	install -m 644 systemd/*.timer debian/splitwire-turkey/lib/systemd/system/
+	
+	# Install polkit policy
+	install -d debian/splitwire-turkey/usr/share/polkit-1/actions
+	install -m 644 data/polkit/com.splitwire.turkey.policy \
+		debian/splitwire-turkey/usr/share/polkit-1/actions/
+	
+	# Install desktop file
+	install -d debian/splitwire-turkey/usr/share/applications
+	install -m 644 data/com.splitwire.turkey.desktop \
+		debian/splitwire-turkey/usr/share/applications/
+	
+	# Install icons
+	install -d debian/splitwire-turkey/usr/share/icons/hicolor/scalable/apps
+	install -m 644 data/icons/hicolor/scalable/apps/com.splitwire.turkey.svg \
+		debian/splitwire-turkey/usr/share/icons/hicolor/scalable/apps/
+	
+	# Install launcher script
+	install -d debian/splitwire-turkey/usr/bin
+	echo '#!/bin/bash' > debian/splitwire-turkey/usr/bin/splitwire
+	echo 'exec python3 -m splitwire "$$@"' >> debian/splitwire-turkey/usr/bin/splitwire
+	chmod 755 debian/splitwire-turkey/usr/bin/splitwire
+	
+	# Create config directory
+	install -d debian/splitwire-turkey/etc/splitwire
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start

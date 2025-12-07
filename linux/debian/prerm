@@ -1,0 +1,35 @@
+#!/bin/bash
+# prerm script for splitwire-turkey
+
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Stop all SplitWire services
+        for service in splitwire-wg splitwire-wg-refresh splitwire-zapret splitwire-byedpi splitwire-cgproxy; do
+            if systemctl is-active --quiet "${service}.service" 2>/dev/null; then
+                systemctl stop "${service}.service" 2>/dev/null || true
+            fi
+            if systemctl is-active --quiet "${service}.timer" 2>/dev/null; then
+                systemctl stop "${service}.timer" 2>/dev/null || true
+            fi
+        done
+        
+        # Bring down WireGuard interface if active
+        if ip link show splitwire &>/dev/null; then
+            wg-quick down splitwire 2>/dev/null || true
+        fi
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

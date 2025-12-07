@@ -1,0 +1,14 @@
+splitwire-turkey (1.0.0-1) unstable; urgency=medium
+
+  * Initial release for Linux
+  * GTK4/Libadwaita user interface
+  * WireGuard VPN with WGCF/WARP integration
+  * Split tunneling support via cgproxy
+  * Zapret DPI bypass (nfqws/tpws)
+  * ByeDPI proxy integration
+  * DNS management with DoH support
+  * Discord repair tools
+  * Multi-language support (tr, en, ru, es)
+  * systemd service integration
+
+ -- SplitWire Team <splitwire@example.com>  Sat, 07 Dec 2024 12:00:00 +0300
