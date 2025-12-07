@@ -2,11 +2,14 @@
 Service modules for SplitWire-Turkey Linux.
 
 This package contains service managers for:
-- WireGuard VPN with WGCF/WARP integration
-- Split tunneling (app-based routing)
+- WireGuard VPN with WGCF/WARP integration (Phase 2)
+- Split tunneling (app-based routing) (Phase 2)
 - Zapret DPI bypass (Phase 3)
+- Blockcheck scanner (Phase 3)
 - ByeDPI proxy (Phase 4)
-- DNS management (Phase 5)
+- Proxy routing (Phase 4)
+- DNS management with DoH support (Phase 5)
+- Discord repair and alternative clients (Phase 6)
 """
 
 from .base import (
@@ -53,6 +56,45 @@ from .blockcheck import (
     get_blockcheck_service,
 )
 
+from .byedpi import (
+    ByeDPIService,
+    ByeDPIConfig,
+    ByeDPIPreset,
+    ByeDPIMode,
+    get_byedpi_service,
+    DEFAULT_PRESETS as BYEDPI_PRESETS,
+)
+
+from .proxy_route import (
+    ProxyRouteService,
+    ProxyRouteConfig,
+    ProxiedApp,
+    ProxyMethod,
+    get_proxy_route_service,
+)
+
+from .dns import (
+    DNSService,
+    DNSConfig,
+    DNSServer,
+    DNSBackup,
+    DNSManager,
+    DoHMode,
+    DNS_PRESETS,
+    get_dns_service,
+)
+
+from .discord import (
+    DiscordService,
+    DiscordConfig,
+    DiscordInstallation,
+    WebCordInstallation,
+    DiscordVersion,
+    InstallMethod,
+    RepairResult,
+    get_discord_service,
+)
+
 __all__ = [
     # base
     "BaseService",
@@ -88,4 +130,35 @@ __all__ = [
     "ScanStatus",
     "ScanProgress",
     "get_blockcheck_service",
+    # byedpi
+    "ByeDPIService",
+    "ByeDPIConfig",
+    "ByeDPIPreset",
+    "ByeDPIMode",
+    "get_byedpi_service",
+    "BYEDPI_PRESETS",
+    # proxy_route
+    "ProxyRouteService",
+    "ProxyRouteConfig",
+    "ProxiedApp",
+    "ProxyMethod",
+    "get_proxy_route_service",
+    # dns
+    "DNSService",
+    "DNSConfig",
+    "DNSServer",
+    "DNSBackup",
+    "DNSManager",
+    "DoHMode",
+    "DNS_PRESETS",
+    "get_dns_service",
+    # discord
+    "DiscordService",
+    "DiscordConfig",
+    "DiscordInstallation",
+    "WebCordInstallation",
+    "DiscordVersion",
+    "InstallMethod",
+    "RepairResult",
+    "get_discord_service",
 ]
