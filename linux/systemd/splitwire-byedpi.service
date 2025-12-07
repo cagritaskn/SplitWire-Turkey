@@ -1,0 +1,32 @@
+[Unit]
+Description=SplitWire ByeDPI Proxy Service
+Documentation=https://github.com/hufrea/byedpi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/byedpi/ciadpi -i 127.0.0.1 -p 1080 --disorder 1 --auto=torst --tlsrec 1+s
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Run as root (needed for some DPI bypass methods)
+User=root
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=no
+
+# Allow network access
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
