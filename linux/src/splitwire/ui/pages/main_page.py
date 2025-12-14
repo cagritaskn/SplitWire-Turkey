@@ -46,7 +46,7 @@ class MainPage(BasePage):
             margin_bottom=8,
         )
         self.append(self._status_box)
-        self._update_status_indicator()
+        # Note: _update_status_indicator() called at end of _build_ui after buttons exist
 
         # Main buttons group
         buttons_group = self.create_preferences_group(
@@ -189,6 +189,9 @@ class MainPage(BasePage):
         self.append(help_box)
         help_btn = self.create_help_button(self._on_help)
         help_box.append(help_btn)
+
+        # Update status indicator now that all buttons exist
+        self._update_status_indicator()
 
     def _build_app_list(self):
         """Build the app selection list inside the expander."""
