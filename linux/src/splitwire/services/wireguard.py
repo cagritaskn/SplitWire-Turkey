@@ -452,10 +452,19 @@ class WireGuardService(BaseService):
         """
         excluded = excluded or DEFAULT_EXCLUDED_NETWORKS
 
-        # Calculate allowed IPs by excluding private networks
-        # This is a simplified approach - for full split tunnel,
-        # we need to calculate the complement of excluded networks
-        allowed_ips = "0.0.0.0/0, ::/0"
+        # Use Cloudflare WARP IPs instead of routing all traffic
+        # This prevents complete internet outage if VPN fails
+        # WARP typically uses these ranges for its services
+        allowed_ips = ", ".join([
+            "162.159.192.0/24",  # Cloudflare WARP
+            "162.159.193.0/24",  # Cloudflare WARP
+            "162.159.195.0/24",  # Cloudflare WARP
+            "162.159.204.0/24",  # Cloudflare WARP
+            "188.114.96.0/24",   # Cloudflare
+            "188.114.97.0/24",   # Cloudflare
+            "104.16.0.0/12",     # Cloudflare CDN (Discord, etc.)
+            "172.64.0.0/13",     # Cloudflare
+        ])
 
         # Replace existing AllowedIPs
         config = re.sub(
