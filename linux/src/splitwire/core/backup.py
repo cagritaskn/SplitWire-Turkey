@@ -163,7 +163,13 @@ class BackupManager:
                     path = Path(file_path)
                     if path.exists():
                         # Use relative path within backup
-                        arcname = str(path).replace(str(Path.home()), "HOME")
+                        # Use unique marker to avoid collisions with real paths
+                        home_str = str(Path.home())
+                        path_str = str(path)
+                        if path_str.startswith(home_str):
+                            arcname = "__USER_HOME__" + path_str[len(home_str):]
+                        else:
+                            arcname = path_str
                         tar.add(str(path), arcname=arcname)
         except Exception as e:
             if backup_path.exists():
@@ -265,7 +271,14 @@ class BackupManager:
             with tarfile.open(backup_path, "r:gz") as tar:
                 for member in tar.getmembers():
                     # Convert archive path back to real path
-                    real_path = member.name.replace("HOME", str(Path.home()))
+                    # Handle both old "HOME" marker and new "__USER_HOME__" marker
+                    if member.name.startswith("__USER_HOME__"):
+                        real_path = str(Path.home()) + member.name[len("__USER_HOME__"):]
+                    elif member.name.startswith("HOME"):
+                        # Legacy support for old backups
+                        real_path = str(Path.home()) + member.name[4:]
+                    else:
+                        real_path = member.name
                     restored_files.append(real_path)
 
                     if not dry_run:

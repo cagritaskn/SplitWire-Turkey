@@ -13,10 +13,11 @@ from gi.repository import Gtk, Adw, GLib
 from typing import Optional, List, TYPE_CHECKING
 from pathlib import Path
 
-from splitwire.core import get_text, get_config
+from splitwire.core import get_text, get_config, save_config
 from splitwire.services import (
     get_wireguard_service,
     get_split_tunnel_service,
+    get_dns_service,
     ServiceStatus,
     KNOWN_APPS,
     BROWSER_APPS,
@@ -33,7 +34,12 @@ class MainPage(BasePage):
     def __init__(self, window: 'SplitWireWindow'):
         self._wg_service = get_wireguard_service()
         self._st_service = get_split_tunnel_service()
-        self._custom_apps: List[str] = []
+        self._dns_service = get_dns_service()
+        # Load custom apps from config
+        config = get_config()
+        self._custom_apps: List[str] = list(config.wireguard.custom_apps or [])
+        # Track which known apps are enabled (all enabled by default)
+        self._enabled_apps: dict[str, bool] = {app_id: True for app_id in KNOWN_APPS.keys()}
         super().__init__(window)
 
     def _build_ui(self):
@@ -190,6 +196,9 @@ class MainPage(BasePage):
         help_btn = self.create_help_button(self._on_help)
         help_box.append(help_btn)
 
+        # Load saved settings
+        self._load_settings()
+
         # Update status indicator now that all buttons exist
         self._update_status_indicator()
 
@@ -278,21 +287,44 @@ class MainPage(BasePage):
         self.set_status(get_text("status", "installing") or "Kuruluyor...")
 
         def do_setup():
-            # Register WGCF account if needed
-            self._wg_service.register_wgcf()
-            # Generate config
-            self._wg_service.generate_config()
-            # Setup split tunnel
-            include_browsers = self._switch_browser.get_active()
-            self._st_service.configure(include_browsers=include_browsers)
-            # Start service
-            self._wg_service.start()
-            return True
+            error_msg = None
+            try:
+                # Register WGCF account if needed
+                if not self._wg_service.register_wgcf():
+                    return (False, get_text("errors", "wgcf_register_failed") or "WGCF kayıt başarısız")
+
+                # Generate config
+                if not self._wg_service.generate_config():
+                    return (False, get_text("errors", "config_generate_failed") or "Config oluşturulamadı")
+
+                # Setup split tunnel with selected apps
+                include_browsers = self._switch_browser.get_active()
+                apps = self._get_selected_apps()
+                self._st_service.configure(apps=apps, include_browsers=include_browsers)
+
+                # Apply Cloudflare DNS (required to bypass ISP DNS hijacking)
+                self._dns_service.install(preset="cloudflare")
+
+                # Start service
+                if not self._wg_service.start():
+                    return (False, get_text("errors", "service_start_failed") or "Servis başlatılamadı")
+
+                # Save settings
+                self._save_settings()
+
+                return (True, None)
+
+            except Exception as e:
+                self._logger.exception(f"Standard setup failed: {e}")
+                return (False, str(e))
 
         def on_complete(result):
             self._update_status_indicator()
-            if result:
+            success, error = result if isinstance(result, tuple) else (result, None)
+            if success:
                 self.show_toast(get_text("messages", "setup_complete") or "Kurulum tamamlandı")
+            else:
+                self.show_toast(f"Hata: {error}" if error else "Kurulum başarısız")
             self.set_status("")
 
         self.run_async(do_setup, on_complete)
@@ -302,18 +334,43 @@ class MainPage(BasePage):
         self.set_status(get_text("status", "installing") or "Kuruluyor...")
 
         def do_setup():
-            # Similar to standard but with different config
-            self._wg_service.register_wgcf()
-            self._wg_service.generate_config(endpoint="alternative")
-            include_browsers = self._switch_browser.get_active()
-            self._st_service.configure(include_browsers=include_browsers)
-            self._wg_service.start()
-            return True
+            try:
+                # Register WGCF account if needed
+                if not self._wg_service.register_wgcf():
+                    return (False, get_text("errors", "wgcf_register_failed") or "WGCF kayıt başarısız")
+
+                # Generate config with alternative endpoint
+                if not self._wg_service.generate_config(endpoint="alternative"):
+                    return (False, get_text("errors", "config_generate_failed") or "Config oluşturulamadı")
+
+                # Setup split tunnel with selected apps
+                include_browsers = self._switch_browser.get_active()
+                apps = self._get_selected_apps()
+                self._st_service.configure(apps=apps, include_browsers=include_browsers)
+
+                # Apply Cloudflare DNS (required to bypass ISP DNS hijacking)
+                self._dns_service.install(preset="cloudflare")
+
+                # Start service
+                if not self._wg_service.start():
+                    return (False, get_text("errors", "service_start_failed") or "Servis başlatılamadı")
+
+                # Save settings
+                self._save_settings()
+
+                return (True, None)
+
+            except Exception as e:
+                self._logger.exception(f"Alternative setup failed: {e}")
+                return (False, str(e))
 
         def on_complete(result):
             self._update_status_indicator()
-            if result:
+            success, error = result if isinstance(result, tuple) else (result, None)
+            if success:
                 self.show_toast(get_text("messages", "setup_complete") or "Kurulum tamamlandı")
+            else:
+                self.show_toast(f"Hata: {error}" if error else "Kurulum başarısız")
             self.set_status("")
 
         self.run_async(do_setup, on_complete)
@@ -323,13 +380,23 @@ class MainPage(BasePage):
         self.set_status(get_text("status", "disconnecting") or "Bağlantı kesiliyor...")
 
         def do_disconnect():
-            self._wg_service.stop()
-            return True
+            try:
+                self._wg_service.stop()
+                # Restore original DNS settings
+                self._dns_service.remove()
+                return (True, None)
+            except Exception as e:
+                self._logger.exception(f"Disconnect failed: {e}")
+                return (False, str(e))
 
         def on_complete(result):
             self._update_status_indicator()
-            if result:
-                self.show_toast(get_text("messages", "service_stopped").format("WireGuard") or "WireGuard durduruldu")
+            success, error = result if isinstance(result, tuple) else (result, None)
+            if success:
+                msg = get_text("messages", "service_stopped") or "{} durduruldu"
+                self.show_toast(msg.format("WireGuard") if "{}" in msg else "WireGuard durduruldu")
+            else:
+                self.show_toast(f"Hata: {error}" if error else "Bağlantı kesilemedi")
             self.set_status("")
 
         self.run_async(do_disconnect, on_complete)
@@ -354,7 +421,10 @@ class MainPage(BasePage):
         """Handle app checkbox toggle."""
         app_id = check.get_name()  # Retrieve app_id from widget name
         active = check.get_active()
-        self._logger.info(f"App {app_id}: {active}")
+        self._enabled_apps[app_id] = active
+        self._logger.info(f"App {app_id}: {'enabled' if active else 'disabled'}")
+        # Save to config immediately
+        self._save_settings()
 
     def _on_add_folder(self, button):
         """Handle add folder button click."""
@@ -373,8 +443,12 @@ class MainPage(BasePage):
             folder = dialog.select_folder_finish(result)
             if folder:
                 path = folder.get_path()
-                self._custom_apps.append(path)
-                self.show_toast(f"Eklendi: {path}")
+                if path not in self._custom_apps:
+                    self._custom_apps.append(path)
+                    self._save_settings()  # Persist the change
+                    self.show_toast(f"Eklendi: {path}")
+                else:
+                    self.show_toast(f"Zaten listede: {path}")
         except GLib.Error as e:
             if e.code != 2:  # Not cancelled
                 self._logger.error(f"Folder selection error: {e}")
@@ -382,6 +456,7 @@ class MainPage(BasePage):
     def _on_clear_list(self, button):
         """Handle clear list button click."""
         self._custom_apps.clear()
+        self._save_settings()  # Persist the change
         self.show_toast(get_text("messages", "list_cleared") or "Liste temizlendi")
 
     def _on_custom_setup(self, button):
@@ -393,19 +468,44 @@ class MainPage(BasePage):
         self.set_status(get_text("status", "installing") or "Kuruluyor...")
 
         def do_setup():
-            self._wg_service.register_wgcf()
-            self._wg_service.generate_config()
-            self._st_service.configure(
-                apps=self._custom_apps,
-                include_browsers=self._switch_browser.get_active()
-            )
-            self._wg_service.start()
-            return True
+            try:
+                # Register WGCF account if needed
+                if not self._wg_service.register_wgcf():
+                    return (False, get_text("errors", "wgcf_register_failed") or "WGCF kayıt başarısız")
+
+                # Generate config
+                if not self._wg_service.generate_config():
+                    return (False, get_text("errors", "config_generate_failed") or "Config oluşturulamadı")
+
+                # Setup split tunnel with custom apps
+                self._st_service.configure(
+                    apps=self._custom_apps,
+                    include_browsers=self._switch_browser.get_active()
+                )
+
+                # Apply Cloudflare DNS (for consistency with other setups)
+                self._dns_service.install(preset="cloudflare")
+
+                # Start service
+                if not self._wg_service.start():
+                    return (False, get_text("errors", "service_start_failed") or "Servis başlatılamadı")
+
+                # Save settings
+                self._save_settings()
+
+                return (True, None)
+
+            except Exception as e:
+                self._logger.exception(f"Custom setup failed: {e}")
+                return (False, str(e))
 
         def on_complete(result):
             self._update_status_indicator()
-            if result:
+            success, error = result if isinstance(result, tuple) else (result, None)
+            if success:
                 self.show_toast(get_text("messages", "setup_complete") or "Kurulum tamamlandı")
+            else:
+                self.show_toast(f"Hata: {error}" if error else "Kurulum başarısız")
             self.set_status("")
 
         self.run_async(do_setup, on_complete)
@@ -458,15 +558,24 @@ class MainPage(BasePage):
             self.set_status(get_text("status", "removing") or "Kaldırılıyor...")
 
             def do_remove():
-                self._wg_service.stop()
-                self._wg_service.remove()
-                self._st_service.remove()
-                return True
+                try:
+                    self._wg_service.stop()
+                    self._wg_service.remove()
+                    self._st_service.remove()
+                    # Restore DNS settings
+                    self._dns_service.remove()
+                    return (True, None)
+                except Exception as e:
+                    self._logger.exception(f"Service removal failed: {e}")
+                    return (False, str(e))
 
             def on_complete(result):
                 self._update_status_indicator()
-                if result:
+                success, error = result if isinstance(result, tuple) else (result, None)
+                if success:
                     self.show_toast(get_text("messages", "service_removed") or "Hizmet kaldırıldı")
+                else:
+                    self.show_toast(f"Hata: {error}" if error else "Kaldırma başarısız")
                 self.set_status("")
 
             self.run_async(do_remove, on_complete)
@@ -488,3 +597,77 @@ Yineleyici: Bağlantıyı 30 dakikada bir yeniler.""",
         )
         dialog.add_response("ok", "Tamam")
         dialog.present()
+
+    # Helper methods
+
+    def _get_selected_apps(self) -> List[str]:
+        """
+        Get list of enabled apps for tunneling.
+
+        Returns a combined list of:
+        - Known apps that are enabled (from checkboxes)
+        - Custom apps added by user
+
+        Returns:
+            List of app paths to tunnel
+        """
+        apps = []
+
+        # Add enabled known apps
+        for app_id, enabled in self._enabled_apps.items():
+            if enabled and app_id in KNOWN_APPS:
+                paths = KNOWN_APPS[app_id]
+                # Add first existing path, or first path if none exist
+                for path in paths:
+                    if Path(path).exists():
+                        apps.append(path)
+                        break
+                else:
+                    if paths:
+                        apps.append(paths[0])
+
+        # Add custom apps
+        apps.extend(self._custom_apps)
+
+        return apps
+
+    def _save_settings(self):
+        """Save current settings to config file."""
+        try:
+            config = get_config()
+
+            # Save app selections
+            config.wireguard.enabled_known_apps = self._enabled_apps.copy()
+            config.wireguard.custom_apps = self._custom_apps.copy()
+
+            # Save switch states
+            config.wireguard.include_browsers = self._switch_browser.get_active()
+            config.wireguard.refresh_timer_enabled = self._switch_refresh.get_active()
+
+            # Persist to disk
+            save_config()
+            self._logger.debug("Settings saved")
+
+        except Exception as e:
+            self._logger.error(f"Failed to save settings: {e}")
+
+    def _load_settings(self):
+        """Load settings from config file and update UI."""
+        try:
+            config = get_config()
+
+            # Load app selections
+            if config.wireguard.enabled_known_apps:
+                self._enabled_apps.update(config.wireguard.enabled_known_apps)
+
+            if config.wireguard.custom_apps:
+                self._custom_apps = list(config.wireguard.custom_apps)
+
+            # Update switch states
+            self._switch_browser.set_active(config.wireguard.include_browsers)
+            self._switch_refresh.set_active(config.wireguard.refresh_timer_enabled)
+
+            self._logger.debug("Settings loaded")
+
+        except Exception as e:
+            self._logger.error(f"Failed to load settings: {e}")

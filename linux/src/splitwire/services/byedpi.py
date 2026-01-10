@@ -10,6 +10,7 @@ import os
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -574,7 +575,6 @@ class ByeDPIService(BaseService):
             # Download binary
             self._logger.info(f"Downloading from {download_url}")
 
-            import tempfile
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 tmp_path = tmp.name
 
@@ -719,7 +719,6 @@ class ByeDPIService(BaseService):
     def _save_pid(self, pid: int) -> None:
         """Save PID to file."""
         try:
-            import tempfile
             with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
                 f.write(str(pid))
                 tmp_path = f.name
@@ -785,7 +784,6 @@ WantedBy=multi-user.target
 """
 
         try:
-            import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.service', delete=False) as f:
                 f.write(service_content)
                 tmp_path = f.name

@@ -112,7 +112,8 @@ class ShellExecutor:
         check: bool = False,
         cwd: Optional[Path] = None,
         env: Optional[dict[str, str]] = None,
-        shell: bool = False
+        shell: bool = False,
+        input_data: Optional[str] = None
     ) -> CommandResult:
         """
         Run a command synchronously.
@@ -125,6 +126,7 @@ class ShellExecutor:
             cwd: Working directory (overrides default)
             env: Additional environment variables
             shell: Run through shell
+            input_data: Data to send to command's stdin
 
         Returns:
             CommandResult with execution details
@@ -163,7 +165,8 @@ class ShellExecutor:
                     timeout=run_timeout,
                     cwd=run_cwd,
                     env=run_env,
-                    shell=shell
+                    shell=shell,
+                    input=input_data
                 )
                 stdout = result.stdout
                 stderr = result.stderr
@@ -173,7 +176,9 @@ class ShellExecutor:
                     timeout=run_timeout,
                     cwd=run_cwd,
                     env=run_env,
-                    shell=shell
+                    shell=shell,
+                    input=input_data,
+                    text=True if input_data else False
                 )
                 stdout = ""
                 stderr = ""

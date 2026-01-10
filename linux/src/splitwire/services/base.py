@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, Callable
 import time
 
-from splitwire.core import get_logger, get_shell, CommandResult
+from splitwire.core import get_logger, get_shell, CommandResult, CommandStatus
 
 
 class ServiceStatus(Enum):
@@ -404,7 +404,6 @@ class SystemdService(BaseService):
     def start(self) -> bool:
         """Start the systemd service."""
         self._logger.info(f"Starting {self._display_name}")
-        self._notify_status_change(ServiceStatus.INSTALLING)
 
         result = self._systemctl("start")
         if result.success:
@@ -458,10 +457,6 @@ class SystemdService(BaseService):
             timeout=10
         )
         return unit in result.stdout
-
-
-# Import CommandStatus for type hints
-from splitwire.core.shell import CommandStatus
 
 
 if __name__ == "__main__":

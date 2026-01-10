@@ -9,7 +9,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Gtk, Adw, Gio, GLib
+from gi.repository import Gtk, Adw, Gio, GLib, Gdk
 from typing import Optional
 import sys
 import os
@@ -185,11 +185,13 @@ class SplitWireApp(Adw.Application):
 
         css_provider.load_from_data(css)
 
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default() if hasattr(self, '_display') else Gtk.Widget.get_display(Gtk.Window()),
-            css_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
 
     def on_activate(self, app):
         """Called when the application is activated."""

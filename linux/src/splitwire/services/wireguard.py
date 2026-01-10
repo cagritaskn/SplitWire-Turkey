@@ -21,6 +21,7 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 from .base import BaseService, ServiceStatus, ServiceType, ServiceInfo
+from .systemd import get_systemd_manager
 from splitwire.core import get_logger, get_shell, get_config
 
 
@@ -51,6 +52,38 @@ DEFAULT_EXCLUDED_NETWORKS = [
     "224.0.0.0/4",
     "255.255.255.255/32",
 ]
+
+# Discord and Cloudflare service IP ranges for split tunneling
+# These are the IPs that should be routed through VPN
+# Note: WARP endpoint IPs (162.159.192-204.x) are NOT included to avoid routing loops
+DISCORD_CLOUDFLARE_IPS = [
+    # Discord service IPs (from DNS lookups)
+    "162.159.128.0/24",
+    "162.159.129.0/24",
+    "162.159.130.0/24",
+    "162.159.135.0/24",
+    "162.159.136.0/24",
+    "162.159.137.0/24",
+    "162.159.138.0/24",
+    # Cloudflare CDN (Discord assets, images, etc.)
+    "104.16.0.0/12",
+    "172.64.0.0/13",
+    # Additional Cloudflare ranges
+    "188.114.96.0/24",
+    "188.114.97.0/24",
+]
+
+# WARP endpoint alternatives
+# Standard: engage.cloudflareclient.com
+# Alternative: engage.nanocat.me (community endpoint)
+WARP_ENDPOINTS = {
+    "standard": "engage.cloudflareclient.com:2408",
+    "alternative": "engage.nanocat.me:2408",
+}
+
+# Refresh timer systemd unit names
+REFRESH_TIMER_UNIT = "splitwire-wg-refresh.timer"
+REFRESH_SERVICE_UNIT = "splitwire-wg-refresh.service"
 
 
 @dataclass
@@ -114,6 +147,7 @@ class WireGuardService(BaseService):
                 include_browsers: bool = False,
                 use_warp: bool = True,
                 custom_config: Optional[Path] = None,
+                endpoint_type: str = "standard",
                 **kwargs) -> bool:
         """
         Install WireGuard VPN configuration.
@@ -123,11 +157,12 @@ class WireGuardService(BaseService):
             include_browsers: Include browsers in tunneling
             use_warp: Use Cloudflare WARP via wgcf
             custom_config: Path to custom WireGuard config
+            endpoint_type: "standard" or "alternative" WARP endpoint
 
         Returns:
             True if installation successful
         """
-        self._logger.info("Installing WireGuard VPN")
+        self._logger.info(f"Installing WireGuard VPN (endpoint={endpoint_type})")
         self._notify_status_change(ServiceStatus.INSTALLING)
 
         try:
@@ -139,7 +174,7 @@ class WireGuardService(BaseService):
             if custom_config and custom_config.exists():
                 config_content = custom_config.read_text()
             elif use_warp:
-                config_content = self._generate_warp_config()
+                config_content = self._generate_warp_config(endpoint_type=endpoint_type)
                 if not config_content:
                     self._logger.error("Failed to generate WARP config")
                     return False
@@ -413,9 +448,12 @@ class WireGuardService(BaseService):
             self._logger.error(f"Profile generation failed: {result.stderr}")
             return False
 
-    def _generate_warp_config(self) -> Optional[str]:
+    def _generate_warp_config(self, endpoint_type: str = "standard") -> Optional[str]:
         """
         Generate WireGuard config for WARP.
+
+        Args:
+            endpoint_type: "standard" or "alternative" endpoint
 
         Returns:
             Config content or None
@@ -428,43 +466,37 @@ class WireGuardService(BaseService):
         # Read and modify profile
         config = WGCF_PROFILE_FILE.read_text()
 
-        # Modify AllowedIPs to exclude local networks (split tunnel)
+        # Modify AllowedIPs for split tunnel (only route Discord/Cloudflare)
         config = self._modify_allowed_ips(config)
 
-        # Add custom DNS
+        # Modify endpoint if alternative requested
+        if endpoint_type != "standard":
+            config = self._modify_endpoint(config, endpoint_type)
+
+        # Remove DNS line to prevent internet breakage
         config = self._add_dns_config(config)
 
         return config
 
     def _modify_allowed_ips(self, config: str,
-                            excluded: Optional[list[str]] = None) -> str:
+                            custom_ips: Optional[list[str]] = None) -> str:
         """
         Modify AllowedIPs in config for split tunneling.
 
-        By default, routes all traffic except local networks.
+        Routes only Discord/Cloudflare service IPs through VPN by default.
+        This prevents complete internet outage if VPN fails and avoids
+        routing loops with WARP endpoint IPs.
 
         Args:
             config: Original config content
-            excluded: Networks to exclude from VPN
+            custom_ips: Custom IP ranges to route (if None, uses DISCORD_CLOUDFLARE_IPS)
 
         Returns:
             Modified config
         """
-        excluded = excluded or DEFAULT_EXCLUDED_NETWORKS
-
-        # Use Cloudflare WARP IPs instead of routing all traffic
-        # This prevents complete internet outage if VPN fails
-        # WARP typically uses these ranges for its services
-        allowed_ips = ", ".join([
-            "162.159.192.0/24",  # Cloudflare WARP
-            "162.159.193.0/24",  # Cloudflare WARP
-            "162.159.195.0/24",  # Cloudflare WARP
-            "162.159.204.0/24",  # Cloudflare WARP
-            "188.114.96.0/24",   # Cloudflare
-            "188.114.97.0/24",   # Cloudflare
-            "104.16.0.0/12",     # Cloudflare CDN (Discord, etc.)
-            "172.64.0.0/13",     # Cloudflare
-        ])
+        # Use custom IPs or default Discord/Cloudflare ranges
+        ips_to_route = custom_ips or DISCORD_CLOUDFLARE_IPS
+        allowed_ips = ", ".join(ips_to_route)
 
         # Replace existing AllowedIPs
         config = re.sub(
@@ -476,25 +508,56 @@ class WireGuardService(BaseService):
 
         return config
 
+    def _modify_endpoint(self, config: str, endpoint_type: str = "standard") -> str:
+        """
+        Modify the endpoint in WireGuard config.
+
+        Args:
+            config: Original config content
+            endpoint_type: "standard" or "alternative"
+
+        Returns:
+            Modified config with new endpoint
+        """
+        endpoint = WARP_ENDPOINTS.get(endpoint_type, WARP_ENDPOINTS["standard"])
+
+        # Replace existing Endpoint
+        config = re.sub(
+            r'^Endpoint\s*=.*$',
+            f'Endpoint = {endpoint}',
+            config,
+            flags=re.MULTILINE
+        )
+
+        self._logger.info(f"Using endpoint: {endpoint}")
+        return config
+
     def _add_dns_config(self, config: str) -> str:
         """
-        Add DNS configuration to WireGuard config.
+        Clean up WireGuard config - remove DNS to prevent internet breakage.
+
+        The issue: wg-quick changes system DNS to the VPN's DNS servers,
+        but if those servers aren't in AllowedIPs, DNS traffic doesn't
+        go through the VPN and may be blocked by ISP.
+
+        Solution: Remove DNS line entirely so system keeps its original DNS.
 
         Args:
             config: Original config content
 
         Returns:
-            Modified config with DNS
+            Modified config without DNS
         """
-        # Check if DNS already configured
-        if re.search(r'^DNS\s*=', config, re.MULTILINE):
-            return config
+        # Remove DNS line completely - this prevents wg-quick from
+        # changing system DNS which breaks internet when DNS IPs
+        # aren't routed through VPN
+        config = re.sub(r'^DNS\s*=.*\n?', '', config, flags=re.MULTILINE)
 
-        # Add DNS after Address line
-        dns_line = "DNS = 1.1.1.1, 1.0.0.1"
+        # Remove IPv6 address to prevent routing issues
+        # Keep only IPv4: "Address = 172.16.0.2/32"
         config = re.sub(
-            r'^(Address\s*=.*)$',
-            f'\\1\n{dns_line}',
+            r'^(Address\s*=\s*[0-9./]+),\s*[0-9a-fA-F:]+/\d+',
+            r'\1',
             config,
             flags=re.MULTILINE
         )
@@ -670,20 +733,81 @@ class WireGuardService(BaseService):
 
     def enable_refresh_timer(self) -> bool:
         """
-        Enable connection refresh timer.
-        Note: Not fully implemented for Linux yet.
+        Enable connection refresh timer via systemd.
+
+        Installs and enables the splitwire-wg-refresh.timer unit which
+        periodically restarts the WireGuard connection every 30 minutes.
+
+        Returns:
+            True if timer enabled successfully
         """
-        self._logger.info("Refresh timer enabled (stub)")
-        # TODO: Implement systemd timer for connection refresh
-        return True
+        self._logger.info("Enabling WireGuard refresh timer")
+
+        try:
+            systemd = get_systemd_manager()
+
+            # Install both the timer and service units if not present
+            if not systemd.unit_exists(REFRESH_SERVICE_UNIT):
+                if not systemd.install_unit(REFRESH_SERVICE_UNIT, enable=False):
+                    self._logger.error("Failed to install refresh service unit")
+                    return False
+
+            if not systemd.unit_exists(REFRESH_TIMER_UNIT):
+                if not systemd.install_unit(REFRESH_TIMER_UNIT, enable=True, start=True):
+                    self._logger.error("Failed to install refresh timer unit")
+                    return False
+            else:
+                # Enable and start the timer
+                systemd.enable(REFRESH_TIMER_UNIT)
+                systemd.start(REFRESH_TIMER_UNIT)
+
+            self._logger.info("WireGuard refresh timer enabled (30 min interval)")
+            return True
+
+        except Exception as e:
+            self._logger.exception(f"Failed to enable refresh timer: {e}")
+            return False
 
     def disable_refresh_timer(self) -> bool:
         """
         Disable connection refresh timer.
-        Note: Not fully implemented for Linux yet.
+
+        Stops and disables the splitwire-wg-refresh.timer unit.
+
+        Returns:
+            True if timer disabled successfully
         """
-        self._logger.info("Refresh timer disabled (stub)")
-        return True
+        self._logger.info("Disabling WireGuard refresh timer")
+
+        try:
+            systemd = get_systemd_manager()
+
+            # Stop and disable the timer
+            if systemd.is_active(REFRESH_TIMER_UNIT):
+                systemd.stop(REFRESH_TIMER_UNIT)
+
+            if systemd.is_enabled(REFRESH_TIMER_UNIT):
+                systemd.disable(REFRESH_TIMER_UNIT)
+
+            self._logger.info("WireGuard refresh timer disabled")
+            return True
+
+        except Exception as e:
+            self._logger.exception(f"Failed to disable refresh timer: {e}")
+            return False
+
+    def is_refresh_timer_enabled(self) -> bool:
+        """
+        Check if refresh timer is enabled.
+
+        Returns:
+            True if timer is enabled and running
+        """
+        try:
+            systemd = get_systemd_manager()
+            return systemd.is_active(REFRESH_TIMER_UNIT)
+        except Exception:
+            return False
 
     def generate_config(self, allowed_apps: Optional[list[str]] = None,
                        include_browsers: bool = False,
@@ -694,12 +818,13 @@ class WireGuardService(BaseService):
         Args:
             allowed_apps: List of apps to tunnel
             include_browsers: Include browser apps
-            endpoint: Endpoint type (e.g., "alternative" for alternate servers)
+            endpoint: Endpoint type ("standard" or "alternative")
 
         Returns:
             Path to generated config file or None
         """
-        self._logger.info(f"Generating WireGuard config (endpoint={endpoint})...")
+        endpoint_type = endpoint or "standard"
+        self._logger.info(f"Generating WireGuard config (endpoint={endpoint_type})...")
 
         # Generate WARP profile
         if not self.generate_warp_profile():
@@ -709,8 +834,14 @@ class WireGuardService(BaseService):
         try:
             config_content = WGCF_PROFILE_FILE.read_text()
 
-            # Modify config
+            # Modify AllowedIPs for split tunneling
             config_content = self._modify_allowed_ips(config_content)
+
+            # Modify endpoint if alternative requested
+            if endpoint_type != "standard":
+                config_content = self._modify_endpoint(config_content, endpoint_type)
+
+            # Remove DNS line to prevent internet breakage
             config_content = self._add_dns_config(config_content)
 
             # Install to /etc/wireguard/
@@ -725,18 +856,21 @@ class WireGuardService(BaseService):
             return None
 
     def generate_config_content(self, allowed_apps: Optional[list[str]] = None,
-                                include_browsers: bool = False) -> str:
+                                include_browsers: bool = False,
+                                endpoint: Optional[str] = None) -> str:
         """
         Generate WireGuard configuration content as string.
 
         Args:
             allowed_apps: List of apps to tunnel
             include_browsers: Include browser apps
+            endpoint: Endpoint type ("standard" or "alternative")
 
         Returns:
             Configuration file content as string
         """
-        self._logger.info("Generating WireGuard config content...")
+        endpoint_type = endpoint or "standard"
+        self._logger.info(f"Generating WireGuard config content (endpoint={endpoint_type})...")
 
         # Ensure profile exists
         if not WGCF_PROFILE_FILE.exists():
@@ -748,6 +882,11 @@ class WireGuardService(BaseService):
             config = WGCF_PROFILE_FILE.read_text()
             # Apply modifications
             config = self._modify_allowed_ips(config)
+
+            # Modify endpoint if alternative requested
+            if endpoint_type != "standard":
+                config = self._modify_endpoint(config, endpoint_type)
+
             config = self._add_dns_config(config)
             return config
         except Exception as e:

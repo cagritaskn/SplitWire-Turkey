@@ -46,7 +46,11 @@ class WireGuardConfig:
     split_tunnel_enabled: bool = True
     allowed_apps: list[str] = field(default_factory=list)
     excluded_apps: list[str] = field(default_factory=list)
+    custom_apps: list[str] = field(default_factory=list)  # User-added custom app paths
+    enabled_known_apps: dict[str, bool] = field(default_factory=dict)  # Which known apps are enabled
     kill_switch: bool = False
+    include_browsers: bool = False
+    refresh_timer_enabled: bool = False
 
 
 @dataclass
