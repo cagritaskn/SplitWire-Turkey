@@ -4,7 +4,7 @@ echo Building SplitWire-Turkey C# WPF Application (Simple Build)...
 REM Check if .NET SDK is installed
 dotnet --version >nul 2>&1
 if errorlevel 1 (
-    echo Error: .NET SDK not found. Please install .NET 6.0 SDK or later.
+    echo Error: .NET SDK not found. Please install .NET 8.0 SDK or later.
     pause
     exit /b 1
 )
@@ -22,7 +22,7 @@ if exist "splitwire-logo-128.png" copy "splitwire-logo-128.png" "SplitWireTurkey
 if exist "splitwireturkeytext.png" copy "splitwireturkeytext.png" "SplitWireTurkey\Resources\"
 if exist "loading.gif" copy "loading.gif" "SplitWireTurkey\Resources\"
 if exist "wgcf.exe" copy "wgcf.exe" "SplitWireTurkey\Resources\"
-if exist "wiresock-vpn-client-x64-1.4.7.1.msi" copy "SplitWireTurkey\Resources\"
+if exist "wiresock-vpn-client-x64-1.4.7.1.msi" copy "wiresock-vpn-client-x64-1.4.7.1.msi" "SplitWireTurkey\Resources\"
 
 REM Copy font files if they exist in the main directory
 if exist "Poppins-Regular.ttf" copy "Poppins-Regular.ttf" "SplitWireTurkey\Resources\"

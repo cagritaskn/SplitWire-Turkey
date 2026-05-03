@@ -1,0 +1,35 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Pp]ublish/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userprefs
+
+# Test results
+TestResults/
+coverage*.xml
+*.trx
+*.coverage
+*.coveragexml
+
+# NuGet
+.nuget/
+*.nupkg
+*.snupkg
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+.idea/
+*.sln.docstates
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Logs
+*.log
