@@ -13,6 +13,8 @@
 [![RU](https://img.shields.io/badge/README-RU-blue.svg)](https://github.com/cagritaskn/SplitWire-Turkey/blob/main/.github/README_RU.md)
 [![ES](https://img.shields.io/badge/README-ES-blue.svg)](https://github.com/cagritaskn/SplitWire-Turkey/blob/main/.github/README_ES.md)
 
+[![CI](https://github.com/cagritaskn/SplitWire-Turkey/actions/workflows/ci.yml/badge.svg)](https://github.com/cagritaskn/SplitWire-Turkey/actions/workflows/ci.yml)
+
 </div>
 
 # SplitWire-Turkey
@@ -328,6 +330,18 @@ Gereksinimler:
    # Veya batch script kullanın (Önerilen)
    ..\build_simple.bat
    ```
+
+4. **Testleri Çalıştırın (opsiyonel)**
+   ```bash
+   # Çözüm dosyasından
+   dotnet test ..\SplitWireTurkey.sln -c Release
+
+   # Sadece test projesi
+   dotnet test ..\SplitWireTurkey.Tests\SplitWireTurkey.Tests.csproj
+   ```
+   `VersionHelper` ve `LanguageManager` davranışı için xUnit testleri
+   `src/SplitWireTurkey.Tests/` altındadır. Aynı paketler GitHub Actions'taki
+   CI workflow'u tarafından her PR'da otomatik olarak çalıştırılır.
 
 ### InnoSetup Kullanarak Kurulum Yürütülebilirini Tekrar Derleme
 Gereksinimler:
