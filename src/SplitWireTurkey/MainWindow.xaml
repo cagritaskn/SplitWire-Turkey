@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         Title="SplitWire-Turkey" 
-        Height="640" Width="600"
-        MinHeight="640" MinWidth="600"
+        Height="640" Width="680"
+        MinHeight="640" MinWidth="680"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
         Background="{DynamicResource MaterialDesignPaper}"
@@ -442,7 +442,7 @@
                     Grid.Row="0"
                     HorizontalAlignment="Left"
                     VerticalAlignment="Top"
-                    Margin="340,148,0,0"
+                    Margin="370,148,0,0"
                     Panel.ZIndex="998"
                     Visibility="Collapsed"
                     Orientation="Horizontal">
@@ -782,19 +782,9 @@
                                    Visibility="Collapsed"/>
                     </StackPanel>
                     
-                    <!-- Ana Sayfa Yardım Butonu -->
-                    <Button x:Name="btnHelpMainPage" 
-                            Grid.Row="2"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,15,10"
-                            Click="BtnHelpMainPage_Click"/>
-
                 </Grid>
             </TabItem>
-            
+
             <!-- ByeDPI Tab -->
             <TabItem Header="ByeDPI" FontFamily="{StaticResource PoppinsBold}">
                 <Grid Margin="16">
@@ -906,18 +896,9 @@
                         </Button>
                     </StackPanel>
                     
-                    <!-- ByeDPI Yardım Butonu -->
-                    <Button x:Name="btnHelpByeDPI" 
-                            Grid.Row="1"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,15,15"
-                            Click="BtnHelpByeDPI_Click"/>
                 </Grid>
             </TabItem>
-            
+
             <!-- Zapret Tab -->
             <TabItem Header="Zapret" FontFamily="{StaticResource PoppinsBold}">
                 <Grid Margin="16">
@@ -1051,13 +1032,14 @@
                              HorizontalAlignment="Left"
                              Visibility="Collapsed"/>
                     
-                    <!-- Zapret Service Buttons -->
-                    <StackPanel Grid.Row="5" 
-                                Orientation="Horizontal" 
+                    <!-- Zapret Service Buttons + Dışlama Listesi -->
+                    <StackPanel Grid.Row="5"
+                                Orientation="Vertical"
                                 HorizontalAlignment="Center"
                                 Margin="0,0,0,20">
-                        <Button x:Name="btnZapretCustomService" 
-                                Content="Önayarlı Hizmet Kur" 
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button x:Name="btnZapretCustomService"
+                                Content="Önayarlı Hizmet Kur"
                                 Style="{StaticResource MaterialDesignOutlinedButton}"
                                 Width="200"
                                 FontFamily="{StaticResource PoppinsRegular}"
@@ -1065,15 +1047,15 @@
                                 ToolTipService.InitialShowDelay="1000"
                                 ToolTipService.ShowDuration="5000">
                             <Button.ToolTip>
-                                <ToolTip x:Name="tooltipPresetService" 
+                                <ToolTip x:Name="tooltipPresetService"
                                          FontFamily="Poppins Regular"
                                          FontSize="12"
                                          Placement="Mouse"/>
                             </Button.ToolTip>
                         </Button>
-                        
-                        <Button x:Name="btnZapretCustomBatch" 
-                                Content="Önayarlı Tek Seferlik" 
+
+                        <Button x:Name="btnZapretCustomBatch"
+                                Content="Önayarlı Tek Seferlik"
                                 Style="{StaticResource MaterialDesignOutlinedButton}"
                                 Width="200"
                                 FontFamily="{StaticResource PoppinsRegular}"
@@ -1082,7 +1064,82 @@
                                 ToolTipService.InitialShowDelay="1000"
                                 ToolTipService.ShowDuration="5000">
                             <Button.ToolTip>
-                                <ToolTip x:Name="tooltipPresetOnce" 
+                                <ToolTip x:Name="tooltipPresetOnce"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                        </StackPanel>
+
+                        <!-- Dışlama listesi kullan -->
+                        <StackPanel Orientation="Horizontal" Margin="0,15,0,0" HorizontalAlignment="Center"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipZapretUseHostlist"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkZapretUseHostlist"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         IsChecked="True"
+                                         Checked="ChkZapretUseHostlist_Checked"
+                                         Unchecked="ChkZapretUseHostlist_Unchecked"/>
+                            <TextBlock x:Name="txtZapretUseHostlist" Text="Dışlama listesi kullan"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <!-- Dışlama listesini düzenle -->
+                        <StackPanel x:Name="editHostlistPanelZapret"
+                                    Orientation="Horizontal"
+                                    Margin="0,10,0,0"
+                                    HorizontalAlignment="Center"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipZapretEditHostlist"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkZapretEditHostlist"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         Checked="ChkZapretEditHostlist_Checked"
+                                         Unchecked="ChkZapretEditHostlist_Unchecked"/>
+                            <TextBlock x:Name="txtZapretEditHostlist" Text="Dışlama listesini düzenle"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <TextBox x:Name="txtZapretHostlist"
+                                 Height="80"
+                                 Width="550"
+                                 MaxWidth="550"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,10,0,0"
+                                 HorizontalAlignment="Center"
+                                 Visibility="Collapsed"/>
+
+                        <Button x:Name="btnZapretSaveHostlist"
+                                Content="Kaydet"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Width="100"
+                                HorizontalAlignment="Center"
+                                Margin="0,10,0,0"
+                                FontFamily="{StaticResource PoppinsRegular}"
+                                Click="BtnZapretSaveHostlist_Click"
+                                Visibility="Collapsed"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipZapretSaveHostlist"
                                          FontFamily="Poppins Regular"
                                          FontSize="12"
                                          Placement="Mouse"/>
@@ -1115,18 +1172,284 @@
                         </Button.Style>
                     </Button>
                     
-                    <!-- Zapret Yardım Butonu -->
-                    <Button x:Name="btnHelpZapret" 
-                            Grid.Row="7"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,0,10"
-                            Click="BtnHelpZapret_Click"/>
                 </Grid>
             </TabItem>
-            
+
+            <!-- Zapret2 Tab -->
+            <TabItem Header="Zapret2" FontFamily="{StaticResource PoppinsBold}">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Zapret2 Otomatik Kurulum Section -->
+                    <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,10,0,20">
+                        <Button x:Name="btnZapret2AutoInstall" 
+                                Content="Zapret2 Otomatik Kurulum" 
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Width="300"
+                                Height="50"
+                                FontSize="16"
+                                FontFamily="{StaticResource PoppinsBold}"
+                                Click="BtnZapret2AutoInstall_Click"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipZapret2Auto" 
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                        
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,20,0,0" HorizontalAlignment="Center"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipScan2" 
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <TextBlock x:Name="txtScan2" Text="Tarama:" 
+                                       VerticalAlignment="Center" 
+                                       FontWeight="Bold"
+                                       FontFamily="{StaticResource PoppinsRegular}"
+                                       Margin="0,0,10,0"/>
+                            
+                            <ComboBox x:Name="cmbScanLevel2" 
+                                      Width="70"
+                                      SelectedIndex="0"
+                                      FontFamily="{StaticResource PoppinsRegular}"
+                                      VerticalAlignment="Center">
+                                <ComboBoxItem Content="Hızlı"/>
+                                <ComboBoxItem Content="Standart"/>
+                                <ComboBoxItem Content="Tam"/>
+                            </ComboBox>
+                        </StackPanel>
+                    </StackPanel>
+                    
+                    <!-- Separator Line -->
+                    <Border Grid.Row="1" 
+                            Height="1" 
+                            Background="LightGray" 
+                            Margin="0,1,0,10"/>
+                    
+                    <!-- Gelişmiş Section -->
+                    <TextBlock Grid.Row="2" 
+                               x:Name="txtPresets2" Text="Hazır Ayarlar" 
+                               FontWeight="Bold" 
+                               FontSize="18"
+                               FontFamily="{StaticResource PoppinsBold}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,15"/>
+                    
+                    <!-- Hazır Ayar ve Düzenle Switch Yan Yana -->
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,10" HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipPreset2" 
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <TextBlock x:Name="txtPresetZapret2" Text="Hazır Ayar:" 
+                                       VerticalAlignment="Center" 
+                                       FontWeight="Bold"
+                                       FontFamily="{StaticResource PoppinsRegular}"
+                                       Margin="0,0,10,0"/>
+                            
+                            <ComboBox x:Name="cmbZapret2Presets" 
+                                      Width="155"
+                                      FontFamily="{StaticResource PoppinsRegular}"
+                                      SelectionChanged="CmbZapret2Presets_SelectionChanged"/>
+                        </StackPanel>
+                        
+                        <StackPanel Orientation="Horizontal"
+                                    Margin="20,0,0,0"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipEditPreset2" 
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <!-- Hazır Ayarı Düzenle Toggle Switch -->
+                            <ToggleButton x:Name="chkManualParams2" 
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         Checked="ChkManualParams2_Checked"
+                                         Unchecked="ChkManualParams2_Unchecked"/>
+                            <TextBlock x:Name="txtEditPresetZapret2" Text="Hazır ayarı düzenle" 
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                    
+                    <TextBox x:Name="txtZapret2Params" 
+                             Grid.Row="4" 
+                             Height="60"
+                             Width="550"
+                             MaxWidth="550"
+                             TextWrapping="Wrap"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             Margin="0,0,0,20"
+                             HorizontalAlignment="Left"
+                             Visibility="Collapsed"/>
+                    
+                    <!-- Zapret2 Service Buttons + Dışlama Listesi -->
+                    <StackPanel Grid.Row="5"
+                                Orientation="Vertical"
+                                HorizontalAlignment="Center"
+                                Margin="0,0,0,20">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button x:Name="btnZapret2CustomService"
+                                Content="Önayarlı Hizmet Kur"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Width="200"
+                                FontFamily="{StaticResource PoppinsRegular}"
+                                Click="BtnZapret2CustomService_Click"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipPresetService2"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+
+                        <Button x:Name="btnZapret2CustomBatch"
+                                Content="Önayarlı Tek Seferlik"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Width="200"
+                                FontFamily="{StaticResource PoppinsRegular}"
+                                Margin="20,0,0,0"
+                                Click="BtnZapret2CustomBatch_Click"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipPresetOnce2"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                        </StackPanel>
+
+                        <!-- Dışlama listesi kullan -->
+                        <StackPanel Orientation="Horizontal" Margin="0,15,0,0" HorizontalAlignment="Center"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipZapret2UseHostlist"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkZapret2UseHostlist"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         IsChecked="True"
+                                         Checked="ChkZapret2UseHostlist_Checked"
+                                         Unchecked="ChkZapret2UseHostlist_Unchecked"/>
+                            <TextBlock x:Name="txtZapret2UseHostlist" Text="Dışlama listesi kullan"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <!-- Dışlama listesini düzenle -->
+                        <StackPanel x:Name="editHostlistPanelZapret2"
+                                    Orientation="Horizontal"
+                                    Margin="0,10,0,0"
+                                    HorizontalAlignment="Center"
+                                    ToolTipService.InitialShowDelay="1000"
+                                    ToolTipService.ShowDuration="5000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipZapret2EditHostlist"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkZapret2EditHostlist"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         Checked="ChkZapret2EditHostlist_Checked"
+                                         Unchecked="ChkZapret2EditHostlist_Unchecked"/>
+                            <TextBlock x:Name="txtZapret2EditHostlist" Text="Dışlama listesini düzenle"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <TextBox x:Name="txtZapret2Hostlist"
+                                 Height="80"
+                                 Width="550"
+                                 MaxWidth="550"
+                                 TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Margin="0,10,0,0"
+                                 HorizontalAlignment="Center"
+                                 Visibility="Collapsed"/>
+
+                        <Button x:Name="btnZapret2SaveHostlist"
+                                Content="Kaydet"
+                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                Width="100"
+                                HorizontalAlignment="Center"
+                                Margin="0,10,0,0"
+                                FontFamily="{StaticResource PoppinsRegular}"
+                                Click="BtnZapret2SaveHostlist_Click"
+                                Visibility="Collapsed"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipZapret2SaveHostlist"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                    </StackPanel>
+                    
+                    <!-- Remove Zapret2 Button -->
+                    <Button x:Name="btnRemoveZapret2" 
+                            Grid.Row="6" 
+                            Content="Zapret2'i Kaldır" 
+                            Width="200"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Top"
+                            FontFamily="{StaticResource PoppinsRegular}"
+                            Click="BtnRemoveZapret2_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+                                <Setter Property="Background" Value="#8B0000"/>
+                                <Setter Property="BorderBrush" Value="#FF0000"/>
+                                <Setter Property="Foreground" Value="White"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#b83737"/>
+                                        <Setter Property="BorderBrush" Value="#FF0000"/>
+                                        <Setter Property="Foreground" Value="Red"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                </Grid>
+            </TabItem>
             <!-- GoodbyeDPI Tab -->
             <TabItem Header="GoodbyeDPI" FontFamily="{StaticResource PoppinsBold}">
                 <Grid Margin="16">
@@ -1352,15 +1675,6 @@
                             </Button.Style>
                         </Button>
                     
-                    <!-- GoodbyeDPI Yardım Butonu -->
-                    <Button x:Name="btnHelpGoodbyeDPI" 
-                            Grid.Row="11"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Margin="0,0,0,10"
-                            Click="BtnHelpGoodbyeDPI_Click"/>
                 </Grid>
             </TabItem>
             
@@ -1424,10 +1738,10 @@
                         </Button.ToolTip>
                     </Button>
                     
-                    <!-- WebCord Yükle Butonu -->
-                    <Button x:Name="btnWebCordInstall" 
+                    <!-- SplitCord-Turkey Yükle Butonu -->
+                    <Button x:Name="btnSplitCordInstall"
                             Grid.Row="2"
-                            Content="WebCord Yükle" 
+                            Content="SplitCord-Turkey Yükle"
                             Style="{StaticResource MaterialDesignOutlinedButton}"
                             Width="300"
                             Height="50"
@@ -1435,11 +1749,11 @@
                             FontFamily="{StaticResource PoppinsBold}"
                             Background="Transparent"
                             Margin="0,0,0,15"
-                            Click="BtnWebCordInstall_Click"
+                            Click="BtnSplitCordInstall_Click"
                             ToolTipService.InitialShowDelay="1000"
                             ToolTipService.ShowDuration="8000">
                         <Button.ToolTip>
-                            <ToolTip x:Name="tooltipWebCordInstall" 
+                            <ToolTip x:Name="tooltipSplitCordInstall" 
                                      FontFamily="Poppins Regular"
                                      FontSize="12"
                                      Placement="Mouse"/>
@@ -1463,30 +1777,6 @@
                                      Style="{StaticResource ModernToggleSwitchStyle}"
                                      IsChecked="False"/>
                         <TextBlock x:Name="txtCleanInstallPTB" Text="Discord PTB için temiz kurulum yap" 
-                                   FontFamily="{StaticResource Montserrat}"
-                                   VerticalAlignment="Center"
-                                   Margin="10,0,0,0"
-                                   TextWrapping="Wrap"
-                                   MaxWidth="250"/>
-                    </StackPanel>
-                    
-                    <!-- WebCord için Kısayol Oluştur Switch -->
-                    <StackPanel Grid.Row="4" 
-                               Orientation="Horizontal" 
-                               HorizontalAlignment="Center" 
-                               Margin="0,5,0,20"
-                               ToolTipService.InitialShowDelay="1000"
-                               ToolTipService.ShowDuration="5000">
-                        <StackPanel.ToolTip>
-                            <ToolTip x:Name="tooltipWebCordShortcut" 
-                                     FontFamily="Poppins Regular"
-                                     FontSize="12"
-                                     Placement="Mouse"/>
-                        </StackPanel.ToolTip>
-                        <ToggleButton x:Name="chkWebCordShortcut" 
-                                     Style="{StaticResource ModernToggleSwitchStyle}"
-                                     IsChecked="True"/>
-                        <TextBlock x:Name="txtWebCordShortcut" Text="WebCord için kısayol oluştur" 
                                    FontFamily="{StaticResource Montserrat}"
                                    VerticalAlignment="Center"
                                    Margin="10,0,0,0"
@@ -1666,7 +1956,7 @@
                         </Button>
                     </Grid>
                     
-                    <!-- WebCord Durum Kontrolü -->
+                    <!-- SplitCord Durum Kontrolü -->
                     <Grid Grid.Row="7" Margin="0,0,0,15">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -1675,27 +1965,27 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         
-                        <TextBlock Grid.Column="0" 
-                                   Text="WebCord:" 
-                                   VerticalAlignment="Center" 
+                        <TextBlock x:Name="lblSplitCordTitle" Grid.Column="0"
+                                   Text="SplitCord-Turkey:"
+                                   VerticalAlignment="Center"
                                    FontWeight="Bold"
                                    FontFamily="{StaticResource PoppinsRegular}"
                                    HorizontalAlignment="Left"/>
-                        
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="138,0,0,0">
-                            <Ellipse x:Name="webCordStatus" 
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="90,0,0,0">
+                            <Ellipse x:Name="splitCordStatus"
                                      Width="12" 
                                      Height="12" 
                                      Fill="Gray" 
                                      Margin="0,0,10,0"/>
-                            <TextBlock x:Name="lblWebCordStatus" 
+                            <TextBlock x:Name="lblSplitCordStatus" 
                                        Text="Yüklü Değil" 
                                        VerticalAlignment="Center"
                                        FontFamily="{StaticResource PoppinsRegular}"/>
                         </StackPanel>
                         
                         <Button Grid.Column="2"
-                                x:Name="btnWebCordAction" 
+                                x:Name="btnSplitCordAction" 
                                 Content="Yükle" 
                                 Style="{StaticResource MaterialDesignOutlinedButton}"
                                 Width="80"
@@ -1704,11 +1994,11 @@
                                 FontFamily="{StaticResource PoppinsRegular}"
                                 HorizontalAlignment="Center"
                                 Margin="0,0,0,0"
-                                Click="BtnWebCordAction_Click"
+                                Click="BtnSplitCordAction_Click"
                                 ToolTipService.InitialShowDelay="1000"
                                 ToolTipService.ShowDuration="5000">
                             <Button.ToolTip>
-                                <ToolTip x:Name="tooltipWebCordAction" 
+                                <ToolTip x:Name="tooltipSplitCordAction" 
                                          FontFamily="Poppins Regular"
                                          FontSize="12"
                                          Placement="Mouse"/>
@@ -1716,7 +2006,7 @@
                         </Button>
                         
                         <Button Grid.Column="3"
-                                x:Name="btnWebCordRemove" 
+                                x:Name="btnSplitCordRemove" 
                                 Content="Kaldır" 
                                 Width="80"
                                 Height="30"
@@ -1724,12 +2014,12 @@
                                 FontFamily="{StaticResource PoppinsRegular}"
                                 HorizontalAlignment="Right"
                                 Visibility="Collapsed"
-                                Click="BtnWebCordRemove_Click"
+                                Click="BtnSplitCordRemove_Click"
                                 Margin="10,0,0,0"
                                 ToolTipService.InitialShowDelay="1000"
                                 ToolTipService.ShowDuration="5000">
                             <Button.ToolTip>
-                                <ToolTip x:Name="tooltipWebCordRemove" 
+                                <ToolTip x:Name="tooltipSplitCordRemove" 
                                          FontFamily="Poppins Regular"
                                          FontSize="12"
                                          Placement="Mouse"/>
@@ -1751,15 +2041,6 @@
                         </Button>
                     </Grid>
                     
-                    <!-- Discord Yardım Butonu -->
-                    <Button x:Name="btnHelpDiscord" 
-                            Grid.Row="8"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,15,15"
-                            Click="BtnHelpDiscord_Click"/>
                 </Grid>
             </TabItem>
 
@@ -2064,9 +2345,54 @@
                             </Button.ToolTip>
                         </Button>
                     </Grid>
-                    
-                    <!-- GoodbyeDPI Hizmeti -->
+
+                    <!-- Zapret2 Hizmeti -->
                     <Grid Grid.Row="7" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="Zapret2:"
+                                   VerticalAlignment="Center"
+                                   FontWeight="Bold"
+                                   FontFamily="{StaticResource PoppinsRegular}"
+                                   HorizontalAlignment="Left"/>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Ellipse x:Name="zapret2Status"
+                                     Width="12"
+                                     Height="12"
+                                     Fill="Gray"
+                                     Margin="0,0,10,0"/>
+                            <TextBlock x:Name="zapret2StatusText"
+                                       Text="Kontrol ediliyor..."
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource PoppinsRegular}"/>
+                        </StackPanel>
+
+                        <Button Grid.Column="2"
+                                x:Name="btnZapret2ServiceRemove"
+                                Content="Kaldır"
+                                Style="{StaticResource AdvancedRemoveButtonStyle}"
+                                HorizontalAlignment="Right"
+                                Visibility="Collapsed"
+                                Click="BtnZapret2ServiceRemove_Click"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipZapret2ServiceRemoveService"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                    </Grid>
+
+                    <!-- GoodbyeDPI Hizmeti -->
+                    <Grid Grid.Row="8" Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -2111,7 +2437,7 @@
                     </Grid>
                     
                     <!-- WinDivert Hizmeti -->
-                    <Grid Grid.Row="8" Margin="0,0,0,10">
+                    <Grid Grid.Row="9" Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -2155,36 +2481,37 @@
                         </Button>
                     </Grid>
                     
-                    <!-- Drover Dosyaları -->
-                    <Grid Grid.Row="9" Margin="0,0,0,10">
+                    <!-- Drover Dosyaları + dnscrypt-proxy -->
+                    <StackPanel Grid.Row="10" Orientation="Vertical">
+                    <Grid Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        
-                        <TextBlock Grid.Column="0" 
-                                   Text="Drover:" 
-                                   VerticalAlignment="Center" 
+
+                        <TextBlock Grid.Column="0"
+                                   Text="Drover:"
+                                   VerticalAlignment="Center"
                                    FontWeight="Bold"
                                    FontFamily="{StaticResource PoppinsRegular}"
                                    HorizontalAlignment="Left"/>
-                        
+
                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-                            <Ellipse x:Name="droverStatus" 
-                                     Width="12" 
-                                     Height="12" 
-                                     Fill="Gray" 
+                            <Ellipse x:Name="droverStatus"
+                                     Width="12"
+                                     Height="12"
+                                     Fill="Gray"
                                      Margin="0,0,10,0"/>
-                            <TextBlock x:Name="droverStatusText" 
-                                       Text="Kontrol ediliyor..." 
+                            <TextBlock x:Name="droverStatusText"
+                                       Text="Kontrol ediliyor..."
                                        VerticalAlignment="Center"
                                        FontFamily="{StaticResource PoppinsRegular}"/>
                         </StackPanel>
-                        
+
                         <Button Grid.Column="2"
-                                x:Name="btnDroverRemove" 
-                                Content="Kaldır" 
+                                x:Name="btnDroverRemove"
+                                Content="Kaldır"
                                 Style="{StaticResource AdvancedRemoveButtonStyle}"
                                 HorizontalAlignment="Right"
                                 Visibility="Collapsed"
@@ -2192,38 +2519,111 @@
                                 ToolTipService.InitialShowDelay="1000"
                                 ToolTipService.ShowDuration="5000">
                             <Button.ToolTip>
-                                <ToolTip x:Name="tooltipDroverRemoveService" 
+                                <ToolTip x:Name="tooltipDroverRemoveService"
                                          FontFamily="Poppins Regular"
                                          FontSize="12"
                                          Placement="Mouse"/>
                             </Button.ToolTip>
                         </Button>
                     </Grid>
-                    
-                    <!-- Otomatik DNS Değişikliği Switch -->
-                    <StackPanel Grid.Row="10" Orientation="Horizontal" 
-                               HorizontalAlignment="Center" 
-                               Margin="0,10,0,10"
-                               ToolTipService.InitialShowDelay="1000"
-                               ToolTipService.ShowDuration="8000">
-                        <StackPanel.ToolTip>
-                            <ToolTip x:Name="tooltipAutoDNSChange" 
-                                     FontFamily="Poppins Regular"
-                                     FontSize="12"
-                                     Placement="Mouse"/>
-                        </StackPanel.ToolTip>
-                        <ToggleButton x:Name="chkAutoDNSChange" 
-                                     Style="{StaticResource ModernToggleSwitchStyle}"
-                                     Checked="ChkAutoDNSChange_Checked"
-                                     Unchecked="ChkAutoDNSChange_Unchecked"/>
-                        <TextBlock x:Name="txtAutoDNSChange" Text="Otomatik DNS değişikliği yap" 
-                                   FontFamily="{StaticResource Montserrat}"
+
+                    <!-- dnscrypt-proxy Hizmeti -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="DnsCrypt-Proxy:"
                                    VerticalAlignment="Center"
-                                   Margin="10,0,0,0"/>
+                                   FontWeight="Bold"
+                                   FontFamily="{StaticResource PoppinsRegular}"
+                                   HorizontalAlignment="Left"/>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Ellipse x:Name="dnscryptProxyStatus"
+                                     Width="12"
+                                     Height="12"
+                                     Fill="Gray"
+                                     Margin="0,0,10,0"/>
+                            <TextBlock x:Name="dnscryptProxyStatusText"
+                                       Text="Kontrol ediliyor..."
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource PoppinsRegular}"/>
+                        </StackPanel>
+
+                        <Button Grid.Column="2"
+                                x:Name="btnDnscryptProxyRemove"
+                                Content="Kaldır"
+                                Style="{StaticResource AdvancedRemoveButtonStyle}"
+                                HorizontalAlignment="Right"
+                                Visibility="Collapsed"
+                                Click="BtnDnscryptProxyRemove_Click"
+                                ToolTipService.InitialShowDelay="1000"
+                                ToolTipService.ShowDuration="5000">
+                            <Button.ToolTip>
+                                <ToolTip x:Name="tooltipDnscryptProxyRemoveService"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </Button.ToolTip>
+                        </Button>
+                    </Grid>
                     </StackPanel>
-                    
+
+                    <!-- Otomatik DNS Değişikliği Switch + dnscrypt-proxy Switch -->
+                    <StackPanel Grid.Row="11" Orientation="Vertical"
+                               HorizontalAlignment="Center"
+                               Margin="0,10,0,10">
+                        <StackPanel Orientation="Horizontal"
+                                   HorizontalAlignment="Center"
+                                   ToolTipService.InitialShowDelay="1000"
+                                   ToolTipService.ShowDuration="8000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipAutoDNSChange"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkAutoDNSChange"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         Checked="ChkAutoDNSChange_Checked"
+                                         Unchecked="ChkAutoDNSChange_Unchecked"/>
+                            <TextBlock x:Name="txtAutoDNSChange" Text="Otomatik DNS değişikliği yap"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,10,0,0"
+                                   ToolTipService.InitialShowDelay="1000"
+                                   ToolTipService.ShowDuration="8000">
+                            <StackPanel.ToolTip>
+                                <ToolTip x:Name="tooltipDnscryptProxyEveryInstall"
+                                         FontFamily="Poppins Regular"
+                                         FontSize="12"
+                                         Placement="Mouse"/>
+                            </StackPanel.ToolTip>
+                            <ToggleButton x:Name="chkDnscryptProxyEveryInstall"
+                                         Style="{StaticResource ModernToggleSwitchStyle}"
+                                         IsChecked="True"
+                                         Checked="ChkDnscryptProxyEveryInstall_Checked"
+                                         Unchecked="ChkDnscryptProxyEveryInstall_Unchecked"/>
+                            <TextBlock x:Name="txtDnscryptProxyEveryInstall" Text="DNS Yöntemi: DnsCrypt-Proxy (Kapalı: Windows DoH)"
+                                       FontFamily="{StaticResource Montserrat}"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"
+                                       TextWrapping="Wrap"
+                                       MaxWidth="320"/>
+                        </StackPanel>
+                    </StackPanel>
+
                     <!-- Tüm Hizmetleri Kaldır Butonu -->
-                    <StackPanel Grid.Row="11" HorizontalAlignment="Center" Margin="0,20,0,0">
+                    <StackPanel Grid.Row="12" HorizontalAlignment="Center" Margin="0,20,0,0">
                         <Button x:Name="btnRemoveAllServices" 
                                 Content="Tüm Hizmetleri Kaldır" 
                                 FontFamily="{StaticResource PoppinsRegular}"
@@ -2254,7 +2654,7 @@
                     </StackPanel>
                     
                     <!-- DNS ve DoH Ayarlarını Geri Al Butonu -->
-                    <StackPanel Grid.Row="12" HorizontalAlignment="Center" Margin="0,15,0,0">
+                    <StackPanel Grid.Row="13" HorizontalAlignment="Center" Margin="0,15,0,0">
                         <Button x:Name="btnResetDNSDoH" 
                                 Content="DNS ve DoH Ayarlarını Geri Al" 
                                 FontFamily="{StaticResource PoppinsRegular}"
@@ -2285,7 +2685,7 @@
                     </StackPanel>
                     
                     <!-- SplitWire-Turkey'i Kaldır Butonu -->
-                    <StackPanel Grid.Row="13" HorizontalAlignment="Center" Margin="0,15,0,0">
+                    <StackPanel Grid.Row="14" HorizontalAlignment="Center" Margin="0,15,0,0">
                         <Button x:Name="btnUninstallSplitWire" 
                                 Content="SplitWire-Turkey'i Kaldır" 
                                 FontFamily="{StaticResource PoppinsRegular}"
@@ -2315,19 +2715,80 @@
                         </Button>
                     </StackPanel>
                     
-                    <!-- Gelişmiş Yardım Butonu -->
-                    <Button x:Name="btnHelpAdvanced" 
-                            Grid.Row="13"
-                            Content="?" 
-                            Style="{StaticResource InfoButtonStyle}"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Top"
-                            Margin="0,3,10,0"
-                            Click="BtnHelpAdvanced_Click"/>
                 </Grid>
             </TabItem>
             </TabControl>
         </ScrollViewer>
+
+        <!-- Sekme Yardım Butonları: pencerenin KENDİSİNE (kök Grid'e) sabitlenmiş, sekme
+             içeriğinin ScrollViewer tarafından kırpılmasından etkilenmiyor (bkz. yukarıdaki
+             ScrollViewer'ın VerticalScrollBarVisibility Disabled olması: sekme içeriği
+             pencere yüksekliğini aşarsa alt kısım, dolayısıyla eskiden orada duran yardım
+             butonu, kırpılıyordu). Her buton her zaman pencerenin sağ alt köşesinde, tam
+             görünür durumda; hangisinin görünür olacağı UpdateOverlayVisibilityForCurrentTab()
+             tarafından aktif sekmeye göre ayarlanıyor. -->
+        <Button x:Name="btnHelpMainPage"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Click="BtnHelpMainPage_Click"/>
+        <Button x:Name="btnHelpByeDPI"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpByeDPI_Click"/>
+        <Button x:Name="btnHelpZapret"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpZapret_Click"/>
+        <Button x:Name="btnHelpZapret2"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpZapret2_Click"/>
+        <Button x:Name="btnHelpGoodbyeDPI"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpGoodbyeDPI_Click"/>
+        <Button x:Name="btnHelpDiscord"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpDiscord_Click"/>
+        <Button x:Name="btnHelpAdvanced"
+                Grid.RowSpan="3"
+                Content="?"
+                Style="{StaticResource InfoButtonStyle}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,20"
+                Visibility="Collapsed"
+                Click="BtnHelpAdvanced_Click"/>
 
         <!-- Loading Overlay -->
         <Grid x:Name="loadingOverlay" 

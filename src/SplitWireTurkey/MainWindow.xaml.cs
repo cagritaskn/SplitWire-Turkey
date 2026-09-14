@@ -54,6 +54,66 @@ namespace SplitWireTurkey
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
+        // ÖNEMLİ (kullanıcının açık talebi üzerine eklendi -- "onay istemeden yeniden başlatma
+        // olmamasının garantisi"): WireSock'un WiX Burn tabanlı installer'ının (özellikle bir
+        // sürücü değişikliği için "reboot pending" durumu bıraktığında) bazı koşullarda /norestart
+        // bayrağını görmezden gelip Windows'un normal kapatma/yeniden başlatma protokolü üzerinden
+        // (ExitWindowsEx/InitiateSystemShutdownEx, WM_QUERYENDSESSION yayınlayarak) bir yeniden
+        // başlatma başlatması İHTİMAL DAHİLİNDE. ShutdownBlockReasonCreate, bu protokolü kullanan
+        // (force edilmemiş) HERHANGİ bir kapatma/yeniden başlatma isteğini -- bizim kendi
+        // RestartSystem() çağrımız dahil -- pencere kapanana/bloğu kaldırana kadar Windows'un
+        // kendisinin ASKIDA TUTMASINI sağlıyor (kullanıcıya "SplitWire-Turkey ... bekletiyor"
+        // diyaloğu gösterilir). WireSock kurulum akışları artık bunu kurulumun BAŞINDAN
+        // (BlockShutdownForInstall) SONUNA (UnblockShutdownForInstall, finally bloğunda) kadar
+        // aktif tutuyor -- böylece kurulum işlemleri bitmeden hiçbir yeniden başlatma isteği
+        // (bizimkiler dahil, bkz. ShowRestartMessage) kullanıcı onayı olmadan gerçekleşemez.
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string pwszReason);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);
+
+        private int _shutdownBlockDepth = 0;
+
+        // İç içe çağrılabilir (ör. Standart Kurulum kendi içinde başka bir kurulum adımını
+        // tetiklerse) -- sayaç sıfıra dönene kadar blok kaldırılmaz.
+        private void BlockShutdownForInstall(string reason)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _shutdownBlockDepth++;
+                    if (_shutdownBlockDepth == 1)
+                    {
+                        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+                        ShutdownBlockReasonCreate(hwnd, reason);
+                    }
+                });
+            }
+            catch { /* garanti katmanı -- ana kurulum akışını asla bozmamalı */ }
+        }
+
+        private void UnblockShutdownForInstall()
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (_shutdownBlockDepth > 0)
+                    {
+                        _shutdownBlockDepth--;
+                    }
+                    if (_shutdownBlockDepth == 0)
+                    {
+                        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+                        ShutdownBlockReasonDestroy(hwnd);
+                    }
+                });
+            }
+            catch { /* garanti katmanı -- ana kurulum akışını asla bozmamalı */ }
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct LUID
         {
@@ -93,6 +153,7 @@ namespace SplitWireTurkey
         private const string REG_VERSION = "Version";
         private const string REG_LANGUAGE = "Language";
         private const string REG_AUTO_DNS_CHANGE = "AutoDNSChange";
+        private const string REG_DNSCRYPT_PROXY_EVERY_INSTALL = "DnscryptProxyEveryInstall";
         
         // Dil değişkenleri
         private string _currentLanguage = "TR";
@@ -271,7 +332,8 @@ namespace SplitWireTurkey
         private readonly WireSockService _wireSockService;
         private readonly List<string> _folders;
         private readonly List<string> _zapretPresets;
-        
+        private readonly List<string> _zapret2Presets;
+
         // Sekme boyut yönetimi için değişkenler
         private double _mainPageBaseHeight = 610;
         private double _mainPageAdvancedSettingsHeight = 875;
@@ -279,11 +341,17 @@ namespace SplitWireTurkey
         private double _discordHeight = 800;
         private double _zapretBaseHeight = 670;
         private double _zapretManualParamsHeight = 765;
+        private double _zapretUseHostlistHeight = 55;
+        private double _zapretEditHostlistHeight = 140;
+        private double _zapret2BaseHeight = 670;
+        private double _zapret2ManualParamsHeight = 765;
+        private double _zapret2UseHostlistHeight = 55;
+        private double _zapret2EditHostlistHeight = 140;
         private double _goodbyeDPIBaseHeight = 550;
         private double _goodbyeDPIManualParamsHeight = 80;
         private double _goodbyeDPIUseBlacklistHeight = 55;
         private double _goodbyeDPIEditBlacklistHeight = 120;
-        private double _advancedHeight = 830;
+        private double _advancedHeight = 920;
         
         // Switch durumları
         private bool _mainPageAdvancedSettingsActive = false;
@@ -295,9 +363,16 @@ namespace SplitWireTurkey
         // WinDivert dosya kontrolü için kritik dosya yolları
         private readonly string[] _criticalWinDivertFiles;
         private bool _zapretManualParamsActive = false;
+        private bool _zapret2ManualParamsActive = false;
         private bool _goodbyeDPIManualParamsActive = false;
         private bool _goodbyeDPIUseBlacklistActive = false;
         private bool _goodbyeDPIEditBlacklistActive = false;
+        // Zapret/Zapret2 dışlama listesi (hostlist-exclude) switch durumları -- varsayılan
+        // olarak "Kullan" açık (XAML IsChecked="True" ile eşleşir).
+        private bool _zapretUseHostlistActive = true;
+        private bool _zapretEditHostlistActive = false;
+        private bool _zapret2UseHostlistActive = true;
+        private bool _zapret2EditHostlistActive = false;
 
         // Görev çubuğu karanlık mod desteği
         private bool _isTaskbarDarkModeSupported = false;
@@ -327,6 +402,7 @@ namespace SplitWireTurkey
             _wireSockService = new WireSockService();
             _folders = new List<string>();
             _zapretPresets = new List<string>();
+            _zapret2Presets = new List<string>();
             
             // Görev çubuğu karanlık mod desteğini kontrol et
             CheckTaskbarDarkModeSupport();
@@ -338,7 +414,7 @@ namespace SplitWireTurkey
             // Kritik WinDivert dosya yollarını tanımla
             _criticalWinDivertFiles = new[]
             {
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "zapret", "arm64", "WinDivert64.sys"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "zapret", "zapret-winws", "WinDivert64.sys"),
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "goodbyedpi", "x86_64", "WinDivert64.sys"),
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "goodbyedpi", "x86", "WinDivert64.sys"),
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "goodbyedpi", "x86", "WinDivert32.sys")
@@ -353,6 +429,7 @@ namespace SplitWireTurkey
             CheckCompatibility();
             CheckZapretFilesExist(); // Sadece kontrol yap, kopyalama yapma
             LoadZapretPresets();
+            LoadZapret2Presets();
             LoadGoodbyeDPIPresets();
             CheckAllServices(); // Yeni eklenen servis kontrolü
             CheckDiscordStatus(); // Discord durumunu kontrol et
@@ -365,7 +442,10 @@ namespace SplitWireTurkey
             
             // Registry'den Auto DNS Change ayarını yükle
             LoadAutoDNSChangeFromRegistryAndApply();
-            
+
+            // Registry'den dnscrypt-proxy "her işlemde kur" switch ayarını yükle
+            LoadDnscryptProxyEveryInstallFromRegistryAndApply();
+
             // Animasyon son opacity değerlerini güncelle
             UpdateAnimFinalOpacityValues();
             
@@ -387,39 +467,25 @@ namespace SplitWireTurkey
         {
             try
             {
-                // Dil menüsü açıksa ve tıklanan yer dil menüsü değilse kapat
+                // Dil menüsü açıksa ve tıklanan yer dil menüsü/butonu değilse kapat.
+                // NOT: Önceden burada e.OriginalSource'un mantıksal (.Parent) ağacı elle
+                // yukarı doğru geziliyordu -- ancak InfoButtonStyle şablonundan üretilen iç
+                // görsel elemanların (Border/Path vb.) .Parent'ı WPF'te genelde null döner
+                // (şablon içi elemanlar mantıksal ağaca otomatik eklenmez), bu da döngünün
+                // "btnLanguageSelector"a hiç ulaşmadan erken bitip menüyü YANLIŞLIKLA "dışarı
+                // tıklandı" sanıp kapatmasına yol açıyordu -- ama SADECE menü zaten açıkken
+                // (ör. imleç butondan hiç ayrılmadan art arda tıklanınca): ilk tıklamada menü
+                // henüz kapalı olduğundan bu kontrol hiç çalışmıyor, ikinci tıklamada ise menü
+                // açık olduğundan bu hatalı "dışarı" tespiti devreye girip menüyü art arda
+                // kapatıp Click olayı tekrar açıyordu (görünürde "anında kapanma" gibi
+                // görünüyordu). IsMouseOver, şablonun iç yapısından bağımsız, imlecin o an
+                // GERÇEKTEN o kontrolün sınırları üzerinde olup olmadığını sorar -- bu yüzden
+                // güvenilir.
                 if (_isLanguageMenuOpen)
                 {
-                    var clickedElement = e.OriginalSource as FrameworkElement;
-                    if (clickedElement != null)
+                    bool isOverLanguageElement = languageMenu.IsMouseOver || btnLanguageSelector.IsMouseOver;
+                    if (!isOverLanguageElement)
                     {
-                        // Tıklanan element veya parent elementlerini kontrol et
-                        var currentElement = clickedElement;
-                        bool isLanguageElement = false;
-                        
-                        while (currentElement != null)
-                        {
-                            if (currentElement.Name == "languageMenu" || 
-                                currentElement.Name == "btnLanguageSelector" ||
-                                currentElement.Name == "btnLanguageTR" ||
-                                currentElement.Name == "btnLanguageEN" ||
-                                currentElement.Name == "btnLanguageRU" ||
-                                currentElement.Name == "btnLanguageES")
-                            {
-                                isLanguageElement = true;
-                                break;
-                            }
-                            currentElement = currentElement.Parent as FrameworkElement;
-                        }
-                        
-                        if (!isLanguageElement)
-                        {
-                            CloseLanguageMenu();
-                        }
-                    }
-                    else
-                    {
-                        // Eğer tıklanan element null ise (boş alan) menüyü kapat
                         CloseLanguageMenu();
                     }
                 }
@@ -437,39 +503,15 @@ namespace SplitWireTurkey
         {
             try
             {
-                // Dil menüsü açıksa ve tıklanan yer dil menüsü değilse kapat
+                // Dil menüsü açıksa ve imleç dil menüsü/butonu üzerinde değilse kapat
+                // (bkz. MainWindow_MouseDown'daki not: IsMouseOver, .Parent tabanlı gezinmenin
+                // şablon içi elemanlarda kırıldığı, imleç butondan hiç ayrılmadan art arda
+                // tıklanınca "anında kapanma" görünümüne yol açan hatayı çözüyor).
                 if (_isLanguageMenuOpen)
                 {
-                    var clickedElement = e.OriginalSource as FrameworkElement;
-                    if (clickedElement != null)
+                    bool isOverLanguageElement = languageMenu.IsMouseOver || btnLanguageSelector.IsMouseOver;
+                    if (!isOverLanguageElement)
                     {
-                        // Tıklanan element veya parent elementlerini kontrol et
-                        var currentElement = clickedElement;
-                        bool isLanguageElement = false;
-                        
-                        while (currentElement != null)
-                        {
-                            if (currentElement.Name == "languageMenu" || 
-                                currentElement.Name == "btnLanguageSelector" ||
-                                currentElement.Name == "btnLanguageTR" ||
-                                currentElement.Name == "btnLanguageEN" ||
-                                currentElement.Name == "btnLanguageRU" ||
-                                currentElement.Name == "btnLanguageES")
-                            {
-                                isLanguageElement = true;
-                                break;
-                            }
-                            currentElement = currentElement.Parent as FrameworkElement;
-                        }
-                        
-                        if (!isLanguageElement)
-                        {
-                            CloseLanguageMenu();
-                        }
-                    }
-                    else
-                    {
-                        // Eğer tıklanan element null ise (boş alan) menüyü kapat
                         CloseLanguageMenu();
                     }
                 }
@@ -577,6 +619,105 @@ namespace SplitWireTurkey
             {
                 Debug.WriteLine($"Kritik WinDivert dosya kontrolü hatası: {ex.Message}");
                 return true; // Hata durumunda güvenli tarafta kal
+            }
+        }
+
+        // Zapret, Zapret2 ve GoodbyeDPI hepsi TEK bir paylaşılan "WinDivert" kernel sürücüsünü
+        // kullanıyor (canlı testte doğrulandı: HKLM\SYSTEM\CurrentControlSet\Services\WinDivert
+        // ImagePath, hangi motor İLK açtıysa onun WinDivert64.sys dosyasına kayıtlı kalıyor,
+        // diğerleri farkında olmadan aynı sürücüyü paylaşıyor). Biri çalışırken bir başkası
+        // kurulmaya/yenilenmeye çalışılırsa WinDivert "STOP_PENDING" durumunda süresiz askıda
+        // kalabiliyor. Bu fonksiyon: kurulmakta olan motor DIŞINDAKİ tüm WinDivert tabanlı
+        // motorları durdurup kaldırır, sonra WinDivert'in GERÇEKTEN durduğunu (ya STOPPED ya da
+        // hiç kurulu değil) sc query ile DOĞRULAYANA kadar bekler -- körlemesine sabit bir
+        // gecikmeye güvenmek yerine.
+        private async Task<bool> EnsureNoOtherWinDivertEngineIsActive(string logPath, string engineBeingInstalled = null)
+        {
+            try
+            {
+                var allEngines = new[] { "GoodbyeDPI", "zapret", "zapret2" };
+                foreach (var svc in allEngines)
+                {
+                    if (!string.IsNullOrEmpty(engineBeingInstalled) &&
+                        string.Equals(svc, engineBeingInstalled, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var installedCheck = await RunCommandAsync("sc", $"query {svc}");
+                    if (installedCheck.Contains("1060"))
+                    {
+                        continue; // zaten kurulu değil
+                    }
+
+                    AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Farklı bir WinDivert tabanlı motor tespit edildi ({svc}), durdurulup kaldırılıyor...\n");
+                    await RunCommandAsync("sc", $"stop {svc}");
+                    await Task.Delay(1500);
+                    await RunCommandAsync("sc", $"delete {svc}");
+                    await Task.Delay(500);
+                }
+
+                AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] WinDivert sürücü hizmeti durduruluyor...\n");
+                await RunCommandAsync("sc", "stop WinDivert");
+
+                var deadline = DateTime.Now.AddSeconds(10);
+                while (DateTime.Now < deadline)
+                {
+                    var queryResult = await RunCommandAsync("sc", "query WinDivert");
+                    if (queryResult.Contains("1060") || queryResult.Contains("STOPPED"))
+                    {
+                        AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] WinDivert durduruldu/kurulu değil, doğrulandı.\n");
+                        return true;
+                    }
+                    await Task.Delay(500);
+                }
+
+                AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: WinDivert 10 saniye içinde durduğu doğrulanamadı -- başka bir uygulama hâlâ kullanıyor olabilir.\n");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureNoOtherWinDivertEngineIsActive hatası: {ex.Message}\n");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// WinDivert sürücüsü üzerinde açık kulp (handle) tutarak silinmesini veya durdurulmasını
+        /// engelleyen işlemleri (sh, bash, blockcheck, blockcheck2, winws2, winws, ciadpi) zorla sonlandırır.
+        /// </summary>
+        private void KillWinDivertProcesses()
+        {
+            var processesToKill = new[] { "sh", "bash", "blockcheck", "blockcheck2", "winws2", "winws", "ciadpi" };
+            foreach (var procName in processesToKill)
+            {
+                try
+                {
+                    var runningProcs = Process.GetProcessesByName(procName);
+                    foreach (var p in runningProcs)
+                    {
+                        try
+                        {
+                            p.Kill(true);
+                            p.WaitForExit(1000);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    using var proc = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "taskkill",
+                        Arguments = $"/F /T /IM {procName}.exe",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                    proc?.WaitForExit(1000);
+                }
+                catch { }
             }
         }
 
@@ -779,7 +920,90 @@ namespace SplitWireTurkey
                 return true; // Hata durumunda: aktif
             }
         }
-        
+
+        private void SaveDnscryptProxyEveryInstallToRegistry(bool isEnabled)
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.CreateSubKey(REG_KEY_PATH))
+                {
+                    if (key != null)
+                    {
+                        key.SetValue(REG_DNSCRYPT_PROXY_EVERY_INSTALL, isEnabled ? 1 : 0, RegistryValueKind.DWord);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"dnscrypt-proxy switch ayarı Registry'ye kaydedilemedi: {ex.Message}");
+            }
+        }
+
+        /// <summary>Varsayılan: aktif (kullanıcı talebi).</summary>
+        private bool LoadDnscryptProxyEveryInstallFromRegistry()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(REG_KEY_PATH))
+                {
+                    if (key != null)
+                    {
+                        var value = key.GetValue(REG_DNSCRYPT_PROXY_EVERY_INSTALL);
+                        if (value != null && value is int)
+                        {
+                            return (int)value == 1;
+                        }
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"dnscrypt-proxy switch ayarı Registry'den okunamadı: {ex.Message}, varsayılan aktif kullanılıyor");
+                return true;
+            }
+        }
+
+        private void LoadDnscryptProxyEveryInstallFromRegistryAndApply()
+        {
+            try
+            {
+                var isEnabled = LoadDnscryptProxyEveryInstallFromRegistry();
+                if (chkDnscryptProxyEveryInstall != null)
+                {
+                    chkDnscryptProxyEveryInstall.IsChecked = isEnabled;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"dnscrypt-proxy switch ayarı uygulanamadı: {ex.Message}");
+            }
+        }
+
+        private void ChkDnscryptProxyEveryInstall_Checked(object sender, RoutedEventArgs e)
+        {
+            SaveDnscryptProxyEveryInstallToRegistry(true);
+            UpdateDnscryptProxyEveryInstallLabel();
+        }
+
+        private void ChkDnscryptProxyEveryInstall_Unchecked(object sender, RoutedEventArgs e)
+        {
+            SaveDnscryptProxyEveryInstallToRegistry(false);
+            UpdateDnscryptProxyEveryInstallLabel();
+        }
+
+        // DNS Yöntemi switch'inin etiketini switch'in o anki durumuna göre günceller
+        // (kullanıcının isteği üzerine -- eskiden sabit "DNS Yöntemi: DnsCrypt-Proxy
+        // (Kapalı: Windows DoH)" metni her iki durumda da aynı kalıyordu, artık switch
+        // açıkken "DNS Yöntemi: DnsCrypt-Proxy", kapalıyken "DNS Yöntemi: Windows DoH" yazıyor).
+        private void UpdateDnscryptProxyEveryInstallLabel()
+        {
+            if (txtDnscryptProxyEveryInstall == null) return;
+            var isOn = chkDnscryptProxyEveryInstall?.IsChecked == true;
+            txtDnscryptProxyEveryInstall.Text = LanguageManager.GetText("ui_texts",
+                isOn ? "dnscrypt_proxy_every_install_on" : "dnscrypt_proxy_every_install_off");
+        }
+
         /// <summary>
         /// Registry'yi temizler (uninstall için)
         /// </summary>
@@ -959,7 +1183,25 @@ namespace SplitWireTurkey
                     {
                         btnZapretCustomBatch.Content = "⚠️ " + LanguageManager.GetText("buttons", "preset_once");
                     }
-                    
+
+                    // Zapret2 Otomatik Kurulum butonu
+                    if (btnZapret2AutoInstall != null)
+                    {
+                        btnZapret2AutoInstall.Content = "⚠️ " + LanguageManager.GetText("buttons", "zapret2_auto");
+                    }
+
+                    // Zapret2 Önayarlı Hizmet Kur butonu
+                    if (btnZapret2CustomService != null)
+                    {
+                        btnZapret2CustomService.Content = "⚠️ " + LanguageManager.GetText("buttons", "preset_service");
+                    }
+
+                    // Zapret2 Önayarlı Tek Seferlik butonu
+                    if (btnZapret2CustomBatch != null)
+                    {
+                        btnZapret2CustomBatch.Content = "⚠️ " + LanguageManager.GetText("buttons", "preset_once");
+                    }
+
                     // GoodbyeDPI Hizmet Kur butonu
                     if (btnGoodbyeDPIService != null)
                     {
@@ -989,7 +1231,22 @@ namespace SplitWireTurkey
                     {
                         btnZapretCustomBatch.Content = LanguageManager.GetText("buttons", "preset_once");
                     }
-                    
+
+                    if (btnZapret2AutoInstall != null)
+                    {
+                        btnZapret2AutoInstall.Content = LanguageManager.GetText("buttons", "zapret2_auto");
+                    }
+
+                    if (btnZapret2CustomService != null)
+                    {
+                        btnZapret2CustomService.Content = LanguageManager.GetText("buttons", "preset_service");
+                    }
+
+                    if (btnZapret2CustomBatch != null)
+                    {
+                        btnZapret2CustomBatch.Content = LanguageManager.GetText("buttons", "preset_once");
+                    }
+
                     if (btnGoodbyeDPIService != null)
                     {
                         btnGoodbyeDPIService.Content = LanguageManager.GetText("buttons", "install_service");
@@ -1039,8 +1296,10 @@ namespace SplitWireTurkey
                 serviceChecks.Add(CheckServiceAsync("winws1"));
                 serviceChecks.Add(CheckServiceAsync("winws2"));
                 serviceChecks.Add(CheckServiceAsync("zapret"));
+                serviceChecks.Add(CheckServiceAsync("zapret2"));
                 serviceChecks.Add(CheckServiceAsync("GoodbyeDPI"));
                 serviceChecks.Add(CheckServiceAsync("WinDivert"));
+                serviceChecks.Add(CheckServiceAsync("dnscrypt-proxy"));
 
                 // Tüm sonuçları bekle
                 var results = await Task.WhenAll(serviceChecks);
@@ -1072,6 +1331,35 @@ namespace SplitWireTurkey
         {
             try
             {
+                if (serviceName == "wiresock-client-service")
+                {
+                    // Modern WireSock 3.x kontrolü (WireSockAppService ve WireSockConnectService)
+                    var appInstalled = await CheckSingleServiceInstalledAsync("WireSockAppService");
+                    if (appInstalled)
+                    {
+                        return (serviceName, true);
+                    }
+
+                    var connectInstalled = await CheckSingleServiceInstalledAsync("WireSockConnectService");
+                    if (connectInstalled)
+                    {
+                        return (serviceName, true);
+                    }
+                }
+
+                var isInstalled = await CheckSingleServiceInstalledAsync(serviceName);
+                return (serviceName, isInstalled);
+            }
+            catch
+            {
+                return (serviceName, false);
+            }
+        }
+
+        private async Task<bool> CheckSingleServiceInstalledAsync(string serviceName)
+        {
+            try
+            {
                 var process = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -1089,12 +1377,11 @@ namespace SplitWireTurkey
                 var output = await process.StandardOutput.ReadToEndAsync();
                 await process.WaitForExitAsync();
 
-                bool isInstalled = output.Contains("SERVICE_NAME:") && !output.Contains("1060");
-                return (serviceName, isInstalled);
+                return output.Contains("SERVICE_NAME:") && !output.Contains("1060");
             }
             catch
             {
-                return (serviceName, false);
+                return false;
             }
         }
 
@@ -1117,12 +1404,18 @@ namespace SplitWireTurkey
             
             if (_serviceStatusCache.TryGetValue("zapret", out bool zapretInstalled))
                 UpdateServiceUI(zapretInstalled, zapretStatus, zapretStatusText, btnZapretServiceRemove);
-            
+
+            if (_serviceStatusCache.TryGetValue("zapret2", out bool zapret2Installed))
+                UpdateServiceUI(zapret2Installed, zapret2Status, zapret2StatusText, btnZapret2ServiceRemove);
+
             if (_serviceStatusCache.TryGetValue("GoodbyeDPI", out bool goodbyeDPIInstalled))
                 UpdateServiceUI(goodbyeDPIInstalled, goodbyeDPIStatus, goodbyeDPIStatusText, btnGoodbyeDPIAdvancedRemove);
             
             if (_serviceStatusCache.TryGetValue("WinDivert", out bool winDivertInstalled))
                 UpdateServiceUI(winDivertInstalled, winDivertStatus, winDivertStatusText, btnWinDivertRemove);
+
+            if (_serviceStatusCache.TryGetValue("dnscrypt-proxy", out bool dnscryptProxyInstalled))
+                UpdateServiceUI(dnscryptProxyInstalled, dnscryptProxyStatus, dnscryptProxyStatusText, btnDnscryptProxyRemove);
         }
 
         private async Task RefreshServiceStatusesAsync()
@@ -1162,7 +1455,7 @@ namespace SplitWireTurkey
             if (statusEllipse != null && statusText != null)
             {
                 statusEllipse.Fill = System.Windows.Media.Brushes.Red;
-                statusText.Text = "Yüklü değil";
+                statusText.Text = LanguageManager.GetText("ui_texts", "not_installed");
             }
         }
 
@@ -1190,7 +1483,7 @@ namespace SplitWireTurkey
             try
             {
                 // Cache'den hizmet durumlarını kontrol et
-                var servicesToCheck = new[] { "zapret", "GoodbyeDPI", "WinDivert", "wiresock-client-service", "ByeDPI", "ProxiFyreService", "winws1", "winws2" };
+                var servicesToCheck = new[] { "zapret", "zapret2", "GoodbyeDPI", "WinDivert", "wiresock-client-service", "ByeDPI", "ProxiFyreService", "winws1", "winws2" };
                 
                 foreach (var service in servicesToCheck)
                 {
@@ -1837,22 +2130,29 @@ namespace SplitWireTurkey
                     zapretTab.Header = LanguageManager.GetText("tabs", "zapret");
                 }
 
+                // Zapret2 sekmesi
+                var zapret2Tab = TabControl.Items[3] as TabItem;
+                if (zapret2Tab != null)
+                {
+                    zapret2Tab.Header = LanguageManager.GetText("tabs", "zapret2");
+                }
+
                 // GoodbyeDPI sekmesi
-                var goodbyedpiTab = TabControl.Items[3] as TabItem;
+                var goodbyedpiTab = TabControl.Items[4] as TabItem;
                 if (goodbyedpiTab != null)
                 {
                     goodbyedpiTab.Header = LanguageManager.GetText("tabs", "goodbyedpi");
                 }
 
                 // Onarım sekmesi
-                var repairTab = TabControl.Items[4] as TabItem;
+                var repairTab = TabControl.Items[5] as TabItem;
                 if (repairTab != null)
                 {
                     repairTab.Header = LanguageManager.GetText("tabs", "repair");
                 }
 
                 // Gelişmiş sekmesi
-                var advancedTab = TabControl.Items[5] as TabItem;
+                var advancedTab = TabControl.Items[6] as TabItem;
                 if (advancedTab != null)
                 {
                     advancedTab.Header = LanguageManager.GetText("tabs", "advanced");
@@ -1917,6 +2217,19 @@ namespace SplitWireTurkey
                 if (btnRemoveZapret != null)
                     btnRemoveZapret.Content = LanguageManager.GetText("buttons", "remove_zapret");
 
+                // Zapret2 butonları
+                if (btnZapret2AutoInstall != null)
+                    btnZapret2AutoInstall.Content = LanguageManager.GetText("buttons", "zapret2_auto");
+
+                if (btnZapret2CustomService != null)
+                    btnZapret2CustomService.Content = LanguageManager.GetText("buttons", "preset_service");
+
+                if (btnZapret2CustomBatch != null)
+                    btnZapret2CustomBatch.Content = LanguageManager.GetText("buttons", "preset_once");
+
+                if (btnRemoveZapret2 != null)
+                    btnRemoveZapret2.Content = LanguageManager.GetText("buttons", "remove_zapret2");
+
                 // GoodbyeDPI butonları
                 if (btnGoodbyeDPISaveBlacklist != null)
                     btnGoodbyeDPISaveBlacklist.Content = LanguageManager.GetText("buttons", "save");
@@ -1943,8 +2256,8 @@ namespace SplitWireTurkey
                 if (btnDiscordPTBRemove != null)
                     btnDiscordPTBRemove.Content = LanguageManager.GetText("buttons", "remove");
 
-                if (btnWebCordRemove != null)
-                    btnWebCordRemove.Content = LanguageManager.GetText("buttons", "remove");
+                if (btnSplitCordRemove != null)
+                    btnSplitCordRemove.Content = LanguageManager.GetText("buttons", "remove");
 
                 // Gelişmiş butonları
                 if (btnRemoveAllServices != null)
@@ -1998,13 +2311,24 @@ namespace SplitWireTurkey
         {
             try
             {
+                if (cmbScanLevel2 != null)
+                {
+                    cmbScanLevel2.Items.Clear();
+                    cmbScanLevel2.Items.Add(LanguageManager.GetText("combobox_items", "fast"));
+                    cmbScanLevel2.Items.Add(LanguageManager.GetText("combobox_items", "standard"));
+                    cmbScanLevel2.Items.Add(LanguageManager.GetText("combobox_items", "full"));
+
+                    // Varsayılan olarak "Hızlı" seçeneğini seç
+                    cmbScanLevel2.SelectedIndex = 0;
+                }
+
                 if (cmbScanLevel != null)
                 {
                     cmbScanLevel.Items.Clear();
                     cmbScanLevel.Items.Add(LanguageManager.GetText("combobox_items", "fast"));
                     cmbScanLevel.Items.Add(LanguageManager.GetText("combobox_items", "standard"));
                     cmbScanLevel.Items.Add(LanguageManager.GetText("combobox_items", "full"));
-                    
+
                     // Varsayılan olarak "Hızlı" seçeneğini seç
                     cmbScanLevel.SelectedIndex = 0;
                 }
@@ -2032,7 +2356,9 @@ namespace SplitWireTurkey
                 
                 if (txtAutoDNSChange != null)
                     txtAutoDNSChange.Text = LanguageManager.GetText("ui_texts", "auto_dns_change");
-                
+
+                UpdateDnscryptProxyEveryInstallLabel();
+
                 if (txtBrowserTunnelingByeDPI != null)
                     txtBrowserTunnelingByeDPI.Text = LanguageManager.GetText("ui_texts", "browser_tunneling");
                 
@@ -2077,22 +2403,41 @@ namespace SplitWireTurkey
                 // Zapret sekmesi tooltip'leri
                 if (tooltipZapretAuto != null)
                     tooltipZapretAuto.Content = LanguageManager.GetText("ui_texts", "tooltip_zapret_auto");
-                
+
                 if (tooltipScan != null)
                     tooltipScan.Content = LanguageManager.GetText("ui_texts", "tooltip_scan");
-                
+
                 if (tooltipPreset != null)
                     tooltipPreset.Content = LanguageManager.GetText("ui_texts", "tooltip_preset");
-                
+
                 if (tooltipEditPreset != null)
                     tooltipEditPreset.Content = LanguageManager.GetText("ui_texts", "tooltip_edit_preset");
-                
+
                 if (tooltipPresetService != null)
                     tooltipPresetService.Content = LanguageManager.GetText("ui_texts", "tooltip_preset_service");
-                
+
                 if (tooltipPresetOnce != null)
                     tooltipPresetOnce.Content = LanguageManager.GetText("ui_texts", "tooltip_preset_once");
-                
+
+                // Zapret2 sekmesi tooltip'leri
+                if (tooltipZapret2Auto != null)
+                    tooltipZapret2Auto.Content = LanguageManager.GetText("ui_texts", "tooltip_zapret_auto");
+
+                if (tooltipScan2 != null)
+                    tooltipScan2.Content = LanguageManager.GetText("ui_texts", "tooltip_scan");
+
+                if (tooltipPreset2 != null)
+                    tooltipPreset2.Content = LanguageManager.GetText("ui_texts", "tooltip_preset");
+
+                if (tooltipEditPreset2 != null)
+                    tooltipEditPreset2.Content = LanguageManager.GetText("ui_texts", "tooltip_edit_preset");
+
+                if (tooltipPresetService2 != null)
+                    tooltipPresetService2.Content = LanguageManager.GetText("ui_texts", "tooltip_preset_service");
+
+                if (tooltipPresetOnce2 != null)
+                    tooltipPresetOnce2.Content = LanguageManager.GetText("ui_texts", "tooltip_preset_once");
+
                 // GoodbyeDPI sekmesi tooltip'leri
                 if (tooltipGoodbyeDPIPreset != null)
                     tooltipGoodbyeDPIPreset.Content = LanguageManager.GetText("ui_texts", "tooltip_goodbyedpi_preset");
@@ -2125,15 +2470,13 @@ namespace SplitWireTurkey
                 if (tooltipCleanInstallPTB != null)
                     tooltipCleanInstallPTB.Content = LanguageManager.GetText("ui_texts", "tooltip_clean_install_ptb");
 
-                // WebCord tooltip'leri
-                if (tooltipWebCordInstall != null)
-                    tooltipWebCordInstall.Content = LanguageManager.GetText("ui_texts", "tooltip_webcord_install");
-                if (tooltipWebCordShortcut != null)
-                    tooltipWebCordShortcut.Content = LanguageManager.GetText("ui_texts", "tooltip_webcord_shortcut");
-                if (tooltipWebCordAction != null)
-                    tooltipWebCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_start");
-                if (tooltipWebCordRemove != null)
-                    tooltipWebCordRemove.Content = LanguageManager.GetText("ui_texts", "tooltip_discord_remove");
+                // SplitCord tooltip'leri
+                if (tooltipSplitCordInstall != null)
+                    tooltipSplitCordInstall.Content = LanguageManager.GetText("ui_texts", "tooltip_splitcord_install");
+                if (tooltipSplitCordAction != null)
+                    tooltipSplitCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_start");
+                if (tooltipSplitCordRemove != null)
+                    tooltipSplitCordRemove.Content = LanguageManager.GetText("ui_texts", "tooltip_discord_remove");
                 
                 // Kaldır butonları tooltip'leri
                 if (tooltipDiscordRemove != null)
@@ -2175,7 +2518,13 @@ namespace SplitWireTurkey
                 
                 if (tooltipAutoDNSChange != null)
                     tooltipAutoDNSChange.Content = LanguageManager.GetText("ui_texts", "tooltip_auto_dns_change");
-                
+
+                if (tooltipDnscryptProxyEveryInstall != null)
+                    tooltipDnscryptProxyEveryInstall.Content = LanguageManager.GetText("ui_texts", "tooltip_dnscrypt_proxy_every_install");
+
+                if (tooltipDnscryptProxyRemoveService != null)
+                    tooltipDnscryptProxyRemoveService.Content = LanguageManager.GetText("ui_texts", "tooltip_remove_service");
+
                 if (tooltipRemoveAllServices != null)
                     tooltipRemoveAllServices.Content = LanguageManager.GetText("ui_texts", "tooltip_remove_all_services");
                 
@@ -2209,9 +2558,49 @@ namespace SplitWireTurkey
                 
                 if (txtEditPresetZapret != null)
                     txtEditPresetZapret.Text = LanguageManager.GetText("ui_texts", "edit_preset");
-                
+
                 if (txtEditPresetGoodbyeDPI != null)
                     txtEditPresetGoodbyeDPI.Text = LanguageManager.GetText("ui_texts", "edit_preset");
+
+                // Zapret2 metinleri
+                if (txtScan2 != null)
+                    txtScan2.Text = LanguageManager.GetText("ui_texts", "scan");
+
+                if (txtPresets2 != null)
+                    txtPresets2.Text = LanguageManager.GetText("ui_texts", "presets");
+
+                if (txtPresetZapret2 != null)
+                    txtPresetZapret2.Text = LanguageManager.GetText("ui_texts", "preset");
+
+                if (txtEditPresetZapret2 != null)
+                    txtEditPresetZapret2.Text = LanguageManager.GetText("ui_texts", "edit_preset");
+
+                // Zapret/Zapret2 dışlama listesi (hostlist-exclude) metinleri
+                if (txtZapretUseHostlist != null)
+                    txtZapretUseHostlist.Text = LanguageManager.GetText("ui_texts", "use_hostlist");
+                if (txtZapretEditHostlist != null)
+                    txtZapretEditHostlist.Text = LanguageManager.GetText("ui_texts", "edit_hostlist");
+                if (btnZapretSaveHostlist != null)
+                    btnZapretSaveHostlist.Content = LanguageManager.GetText("buttons", "save");
+                if (tooltipZapretUseHostlist != null)
+                    tooltipZapretUseHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_use_hostlist");
+                if (tooltipZapretEditHostlist != null)
+                    tooltipZapretEditHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_edit_hostlist");
+                if (tooltipZapretSaveHostlist != null)
+                    tooltipZapretSaveHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_save_hostlist");
+
+                if (txtZapret2UseHostlist != null)
+                    txtZapret2UseHostlist.Text = LanguageManager.GetText("ui_texts", "use_hostlist");
+                if (txtZapret2EditHostlist != null)
+                    txtZapret2EditHostlist.Text = LanguageManager.GetText("ui_texts", "edit_hostlist");
+                if (btnZapret2SaveHostlist != null)
+                    btnZapret2SaveHostlist.Content = LanguageManager.GetText("buttons", "save");
+                if (tooltipZapret2UseHostlist != null)
+                    tooltipZapret2UseHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_use_hostlist");
+                if (tooltipZapret2EditHostlist != null)
+                    tooltipZapret2EditHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_edit_hostlist");
+                if (tooltipZapret2SaveHostlist != null)
+                    tooltipZapret2SaveHostlist.Content = LanguageManager.GetText("ui_texts", "tooltip_save_hostlist");
 
                 // GoodbyeDPI metinleri
                 if (txtUseBlacklist != null)
@@ -2224,11 +2613,11 @@ namespace SplitWireTurkey
                 if (txtCleanInstallPTB != null)
                     txtCleanInstallPTB.Text = LanguageManager.GetText("ui_texts", "clean_install_ptb");
 
-                // WebCord butonları
-                if (btnWebCordInstall != null)
-                    btnWebCordInstall.Content = LanguageManager.GetText("ui_texts", "install_webcord");
-                if (txtWebCordShortcut != null)
-                    txtWebCordShortcut.Text = LanguageManager.GetText("ui_texts", "webcord_shortcut");
+                // SplitCord-Turkey butonları
+                if (btnSplitCordInstall != null)
+                    btnSplitCordInstall.Content = LanguageManager.GetText("ui_texts", "install_splitcord");
+                if (lblSplitCordTitle != null)
+                    lblSplitCordTitle.Text = LanguageManager.GetText("ui_texts", "splitcord_label");
 
                 // Gelişmiş metinleri
                 if (txtServices != null)
@@ -2540,7 +2929,43 @@ namespace SplitWireTurkey
                     tooltipPresetOnce.Background = tooltipBackground;
                     tooltipPresetOnce.Foreground = tooltipForeground;
                 }
-                
+
+                if (tooltipZapret2Auto != null)
+                {
+                    tooltipZapret2Auto.Background = tooltipBackground;
+                    tooltipZapret2Auto.Foreground = tooltipForeground;
+                }
+
+                if (tooltipScan2 != null)
+                {
+                    tooltipScan2.Background = tooltipBackground;
+                    tooltipScan2.Foreground = tooltipForeground;
+                }
+
+                if (tooltipPreset2 != null)
+                {
+                    tooltipPreset2.Background = tooltipBackground;
+                    tooltipPreset2.Foreground = tooltipForeground;
+                }
+
+                if (tooltipEditPreset2 != null)
+                {
+                    tooltipEditPreset2.Background = tooltipBackground;
+                    tooltipEditPreset2.Foreground = tooltipForeground;
+                }
+
+                if (tooltipPresetService2 != null)
+                {
+                    tooltipPresetService2.Background = tooltipBackground;
+                    tooltipPresetService2.Foreground = tooltipForeground;
+                }
+
+                if (tooltipPresetOnce2 != null)
+                {
+                    tooltipPresetOnce2.Background = tooltipBackground;
+                    tooltipPresetOnce2.Foreground = tooltipForeground;
+                }
+
                 // GoodbyeDPI sekmesi tooltip'leri
                 if (tooltipGoodbyeDPIPreset != null)
                 {
@@ -2627,29 +3052,23 @@ namespace SplitWireTurkey
                     tooltipDiscordPTBRemove.Foreground = tooltipForeground;
                 }
 
-                // WebCord tooltip'leri
-                if (tooltipWebCordInstall != null)
+                // SplitCord tooltip'leri
+                if (tooltipSplitCordInstall != null)
                 {
-                    tooltipWebCordInstall.Background = tooltipBackground;
-                    tooltipWebCordInstall.Foreground = tooltipForeground;
+                    tooltipSplitCordInstall.Background = tooltipBackground;
+                    tooltipSplitCordInstall.Foreground = tooltipForeground;
                 }
 
-                if (tooltipWebCordShortcut != null)
+                if (tooltipSplitCordAction != null)
                 {
-                    tooltipWebCordShortcut.Background = tooltipBackground;
-                    tooltipWebCordShortcut.Foreground = tooltipForeground;
+                    tooltipSplitCordAction.Background = tooltipBackground;
+                    tooltipSplitCordAction.Foreground = tooltipForeground;
                 }
 
-                if (tooltipWebCordAction != null)
+                if (tooltipSplitCordRemove != null)
                 {
-                    tooltipWebCordAction.Background = tooltipBackground;
-                    tooltipWebCordAction.Foreground = tooltipForeground;
-                }
-
-                if (tooltipWebCordRemove != null)
-                {
-                    tooltipWebCordRemove.Background = tooltipBackground;
-                    tooltipWebCordRemove.Foreground = tooltipForeground;
+                    tooltipSplitCordRemove.Background = tooltipBackground;
+                    tooltipSplitCordRemove.Foreground = tooltipForeground;
                 }
 
                 // Gelişmiş sekmesi tooltip'leri
@@ -2712,7 +3131,55 @@ namespace SplitWireTurkey
                     tooltipAutoDNSChange.Background = tooltipBackground;
                     tooltipAutoDNSChange.Foreground = tooltipForeground;
                 }
-                
+
+                if (tooltipDnscryptProxyEveryInstall != null)
+                {
+                    tooltipDnscryptProxyEveryInstall.Background = tooltipBackground;
+                    tooltipDnscryptProxyEveryInstall.Foreground = tooltipForeground;
+                }
+
+                if (tooltipDnscryptProxyRemoveService != null)
+                {
+                    tooltipDnscryptProxyRemoveService.Background = tooltipBackground;
+                    tooltipDnscryptProxyRemoveService.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapretUseHostlist != null)
+                {
+                    tooltipZapretUseHostlist.Background = tooltipBackground;
+                    tooltipZapretUseHostlist.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapretEditHostlist != null)
+                {
+                    tooltipZapretEditHostlist.Background = tooltipBackground;
+                    tooltipZapretEditHostlist.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapretSaveHostlist != null)
+                {
+                    tooltipZapretSaveHostlist.Background = tooltipBackground;
+                    tooltipZapretSaveHostlist.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapret2UseHostlist != null)
+                {
+                    tooltipZapret2UseHostlist.Background = tooltipBackground;
+                    tooltipZapret2UseHostlist.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapret2EditHostlist != null)
+                {
+                    tooltipZapret2EditHostlist.Background = tooltipBackground;
+                    tooltipZapret2EditHostlist.Foreground = tooltipForeground;
+                }
+
+                if (tooltipZapret2SaveHostlist != null)
+                {
+                    tooltipZapret2SaveHostlist.Background = tooltipBackground;
+                    tooltipZapret2SaveHostlist.Foreground = tooltipForeground;
+                }
+
                 if (tooltipRemoveAllServices != null)
                 {
                     tooltipRemoveAllServices.Background = tooltipBackground;
@@ -2955,18 +3422,22 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            
+            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+
             // Standart kurulum log dosyasını başlat
             var standardLogPath = GetStandardSetupLogPath();
             File.WriteAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] === STANDART KURULUM BAŞLATILIYOR ===\n");
-            
+
             try
             {
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1. AŞAMA: Kurulum öncesi temizlik başlatılıyor...\n");
                 
                 // Kurulum öncesi temizlik (Discord + tüm hizmetler)
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1.1. Kurulum öncesi temizlik yapılıyor...\n");
-                var cleanupSuccess = await PerformPreSetupCleanupAsync();
+                // alsoRemoveWireSock: false -- bu akışın kendisi WireSock'u kuruyor, kendi
+                // servislerini kurulumdan önce silmesi "WireSock hizmeti kurulmuyor" sorununa
+                // yol açıyordu (bkz. PerformPreSetupCleanupAsync üzerindeki not).
+                var cleanupSuccess = await PerformPreSetupCleanupAsync(alsoRemoveWireSock: false);
                 if (cleanupSuccess)
                 {
                     File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1.1. Kurulum öncesi temizlik başarıyla tamamlandı.\n");
@@ -3026,9 +3497,13 @@ namespace SplitWireTurkey
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Standart kurulum sırasında hata oluştu: {ex.Message}\n");
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] === STANDART KURULUM HATA İLE SONLANDI ===\n");
                 ShowLoading(false);
-                
+
                 // Hizmet durumlarını güncelle
                 CheckAllServices();
+            }
+            finally
+            {
+                UnblockShutdownForInstall();
             }
         }
 
@@ -3040,15 +3515,29 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            
+            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+
             try
             {
                 // Kurulum öncesi temizlik (Discord + tüm hizmetler)
-                var cleanupSuccess = await PerformPreSetupCleanupAsync();
+                // alsoRemoveWireSock: false -- bu akışın kendisi WireSock'u kuruyor.
+                var cleanupSuccess = await PerformPreSetupCleanupAsync(alsoRemoveWireSock: false);
                 if (!cleanupSuccess)
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "cleanup_warning"), 
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "cleanup_warning"),
                         LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+
+                if (!_wireSockService.IsLatestWireSockInstalled())
+                {
+                    await DownloadAndInstallWireSock();
+
+                    // Kurulum sonrası tekrar kontrol et
+                    if (!_wireSockService.IsLatestWireSockInstalled())
+                    {
+                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_install_unverified"),
+                            LanguageManager.GetText("messages", "install_completed_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
 
                 await PerformAlternativeSetup();
@@ -3056,7 +3545,8 @@ namespace SplitWireTurkey
             finally
             {
                 ShowLoading(false);
-                
+                UnblockShutdownForInstall();
+
                 // Hizmet durumlarını güncelle
                 CheckAllServices();
             }
@@ -3107,8 +3597,12 @@ namespace SplitWireTurkey
             
             try
             {
+                // WinDivert kilitlerini önlemek için ilgili tüm işlemleri zorla sonlandır
+                KillWinDivertProcesses();
+                await Task.Delay(500);
+
                 // Doğru sıralamayla hizmetleri kaldır (zapret, GoodbyeDPI, WinDivert sıralaması önemli)
-                var services = new[] { "zapret", "GoodbyeDPI", "WinDivert", "winws1", "winws2", "wiresock-client-service", "ByeDPI", "ProxiFyreService" };
+                var services = new[] { "zapret", "zapret2", "GoodbyeDPI", "winws1", "winws2", "WinDivert", "wiresock-client-service", "WireSockAppService", "WireSockConnectService", "ByeDPI", "ProxiFyreService", "dnscrypt-proxy" };
                 var logPath = GetLogPath();
                 File.AppendAllText(logPath, "Tüm hizmetler durduruluyor ve kaldırılıyor...\n");
                 
@@ -3122,6 +3616,9 @@ namespace SplitWireTurkey
                     ExecuteCommand("sc", $"delete {service}");
                     File.AppendAllText(logPath, $"{service} hizmeti silindi.\n");
                 }
+
+                // WireSock'u ek olarak kendi servisi üzerinden tam temizle (CLI bağlantısı, profil, servisler)
+                await _wireSockService.RemoveServiceAsync();
 
                 // Windows Firewall kurallarını da temizle
                 File.AppendAllText(logPath, "Windows Firewall kuralları temizleniyor...\n");
@@ -3142,6 +3639,10 @@ namespace SplitWireTurkey
                 {
                     File.AppendAllText(logPath, "UYARI: WireSockRefresh görevi kaldırılamadı veya zaten mevcut değildi.\n");
                 }
+
+                // Sistem DNS ve DoH ayarlarını otomatik/DHCP'ye çek
+                File.AppendAllText(logPath, "Sistem DNS ayarları otomatik (DHCP) durumuna getiriliyor...\n");
+                await ResetModernDNSSettingsAsync();
                 
                 System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "all_services_removed"), 
                     LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
@@ -3552,22 +4053,24 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            
+            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+
             try
             {
                 // Kurulum öncesi temizlik (Discord + tüm hizmetler)
-                var cleanupSuccess = await PerformPreSetupCleanupAsync();
+                // alsoRemoveWireSock: false -- bu akışın kendisi WireSock'u kuruyor.
+                var cleanupSuccess = await PerformPreSetupCleanupAsync(alsoRemoveWireSock: false);
                 if (!cleanupSuccess)
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "cleanup_warning"), 
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "cleanup_warning"),
                         LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
 
                 if (!_wireSockService.IsWireSockInstalled())
                 {
-                    var downloadResult = System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_not_installed_question"), 
+                    var downloadResult = System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_not_installed_question"),
                         LanguageManager.GetText("messages", "wiresock_not_installed_title"), MessageBoxButton.YesNo, MessageBoxImage.Question);
-                    
+
                     if (downloadResult == MessageBoxResult.Yes)
                     {
                         await DownloadAndInstallWireSock();
@@ -3584,6 +4087,8 @@ namespace SplitWireTurkey
             finally
             {
                 ShowLoading(false);
+                UnblockShutdownForInstall();
+                CheckAllServices();
             }
         }
 
@@ -3647,13 +4152,14 @@ namespace SplitWireTurkey
                 }
                 else
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "services_remove_failed"), 
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "services_remove_failed"),
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
             finally
             {
                 ShowLoading(false);
+                CheckAllServices();
             }
         }
 
@@ -3767,7 +4273,7 @@ namespace SplitWireTurkey
                 File.AppendAllText(logPath, "GoodbyeDPI ve WinDivert hizmetleri kaldırma tamamlandı.\n");
                 
                 // Hizmetleri doğru sırayla durdur (zapret, GoodbyeDPI, WinDivert sıralaması önemli)
-                var servicesToStop = new[] { "zapret", "GoodbyeDPI", "WinDivert", "winws1", "winws2", "wiresock-client-service", "ByeDPI", "ProxiFyreService" };
+                var servicesToStop = new[] { "zapret", "zapret2", "GoodbyeDPI", "WinDivert", "winws1", "winws2", "wiresock-client-service", "ByeDPI", "ProxiFyreService" };
                 
                 File.AppendAllText(logPath, "Hizmetler durduruluyor...\n");
                 foreach (var service in servicesToStop)
@@ -3792,7 +4298,7 @@ namespace SplitWireTurkey
                 }
                 
                 // Tüm hizmetleri sil (aynı sıralama)
-                var servicesToDelete = new[] { "zapret", "GoodbyeDPI", "WinDivert", "winws1", "winws2", "wiresock-client-service", "ByeDPI", "ProxiFyreService" };
+                var servicesToDelete = new[] { "zapret", "zapret2", "GoodbyeDPI", "WinDivert", "winws1", "winws2", "wiresock-client-service", "ByeDPI", "ProxiFyreService" };
                 
                 File.AppendAllText(logPath, "Hizmetler siliniyor...\n");
                 foreach (var service in servicesToDelete)
@@ -3900,6 +4406,11 @@ namespace SplitWireTurkey
                 // Drover dosyalarını temizle
                 await CleanupDroverFilesAsync();
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.1. Drover dosyaları temizleme tamamlandı.\n");
+
+                // Varsa ProxiFyre hizmetini durdur ve kaldır
+                File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.1.b. Varsa ProxiFyre hizmeti kontrol ediliyor...\n");
+                ExecuteCommand("sc", "stop ProxiFyreService");
+                ExecuteCommand("sc", "delete ProxiFyreService");
                 
                 // DNS ayarları (sadece switch aktifse)
                 var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
@@ -3963,13 +4474,39 @@ namespace SplitWireTurkey
                             File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.5. WireSock Refresh görevi oluşturulmayacak (switch kapalı).\n");
                         }
                         
-                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.6. Sistem yeniden başlatma mesajı gösteriliyor.\n");
+                        // Standart Kurulum: WireSock 3.4.8.1 + ByeDPI-Drover
+                        // 1. ByeDPI hizmetini kur
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.6. ByeDPI hizmeti kuruluyor...\n");
+                        await InstallByeDPIServiceAsync();
+
+                        // 2. ByeDPI Firewall kurallarını ekle
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.7. ByeDPI Firewall kuralları ekleniyor...\n");
+                        await AddByeDPIFirewallRulesAsync();
+
+                        // 3. Drover dosyalarını Discord klasörüne yükle
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.8. Drover dosyaları Discord klasörüne yükleniyor...\n");
+                        var droverResult = await InstallDroverFilesAsync();
+                        if (droverResult)
+                        {
+                            File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.8. Drover dosyaları başarıyla yüklendi.\n");
+                        }
+                        else
+                        {
+                            File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.8. UYARI: Drover dosyaları yüklenemedi.\n");
+                        }
+
+                        // WireSock kısayolunu sil
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.9. WireSock kısayolu temizleniyor...\n");
+                        RemoveWireSockShortcut(standardLogPath);
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.9. WireSock kısayolu temizleme tamamlandı.\n");
+                        
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.10. Sistem yeniden başlatma mesajı gösteriliyor.\n");
                         ShowRestartMessage();
                         
                         // Ana kurulum başarılı sonrası tüm hizmet durumlarını güncelle
                         CheckAllServices();
                         
-                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.6. Sistem yeniden başlatma mesajı gösterildi.\n");
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.10. Sistem yeniden başlatma mesajı gösterildi.\n");
                     }
                     else
                     {
@@ -4141,28 +4678,35 @@ namespace SplitWireTurkey
             ShowLoading(true);
             
             var logPath = GetLogPath();
-            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Alternatif kurulum başlatılıyor...\n");
+            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Alternatif kurulum başlatılıyor (Saf WireSock 3.4.8.1 - ByeDPI/Drover olmadan)...\n");
             
             try
             {
-                // Drover dosyalarını temizle
+                // 1. Drover dosyalarını temizle
                 File.AppendAllText(logPath, "Drover dosyaları temizleniyor...\n");
                 await CleanupDroverFilesAsync();
+
+                // 2. Varsa ByeDPI ve ProxiFyre hizmetlerini durdur ve kaldır
+                File.AppendAllText(logPath, "ByeDPI ve ProxiFyre hizmetleri kontrol ediliyor, varsa durdurulup kaldırılıyor...\n");
+                ExecuteCommand("sc", "stop byedpi");
+                ExecuteCommand("sc", "delete byedpi");
+                ExecuteCommand("sc", "stop ProxiFyreService");
+                ExecuteCommand("sc", "delete ProxiFyreService");
                 
-                // DNS ayarları (sadece switch aktifse)
+                // 3. DNS ayarları (sadece switch aktifse)
                 var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
                 if (enableAutoDNS)
                 {
-                File.AppendAllText(logPath, "DNS ayarları yapılıyor...\n");
-                var dnsSuccess = await SetModernDNSSettingsAsync();
-                
-                if (!dnsSuccess)
-                {
-                    File.AppendAllText(logPath, "DNS ayarları başarısız oldu. Kurulum devam ediyor...\n");
-                }
-                else
-                {
-                    File.AppendAllText(logPath, "DNS ayarları başarıyla yapıldı.\n");
+                    File.AppendAllText(logPath, "DNS ayarları yapılıyor...\n");
+                    var dnsSuccess = await SetModernDNSSettingsAsync();
+                    
+                    if (!dnsSuccess)
+                    {
+                        File.AppendAllText(logPath, "DNS ayarları başarısız oldu. Kurulum devam ediyor...\n");
+                    }
+                    else
+                    {
+                        File.AppendAllText(logPath, "DNS ayarları başarıyla yapıldı.\n");
                     }
                 }
                 else
@@ -4170,256 +4714,20 @@ namespace SplitWireTurkey
                     File.AppendAllText(logPath, "DNS ayarları atlandı (switch kapalı).\n");
                 }
 
-                // Önce mevcut WireSock hizmetini durdur ve kaldır
-                File.AppendAllText(logPath, "Mevcut WireSock hizmeti kaldırılıyor...\n");
-                var uninstallSuccess = await _wireSockService.RemoveServiceAsync();
-                if (!uninstallSuccess)
-                {
-                    // Hizmet zaten yüklü değilse işlemlere devam et
-                    if (!_wireSockService.IsWireSockInstalled())
-                    {
-                        File.AppendAllText(logPath, "WireSock hizmeti zaten yüklü değil. İşlemlere devam ediliyor...\n");
-                    }
-                    else
-                    {
-                        File.AppendAllText(logPath, "Mevcut WireSock hizmeti kaldırılamadı.\n");
-                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_remove_failed_alt"), 
-                            LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-                }
-                else
-                {
-                    File.AppendAllText(logPath, "Mevcut WireSock hizmeti başarıyla kaldırıldı.\n");
-                }
+                // ÖNEMLİ (kullanıcının bildirdiği "onay istemeden otomatik yeniden başlatma"
+                // sorununun kök sebebi): burada DAHA ÖNCE ikinci bir "WireSock kurulu mu" kontrolü
+                // olup, kuruluysa DownloadAndInstallWireSock()'u TEKRAR çağırıyordu -- ama bu
+                // fonksiyonu zaten çağıran BtnAlternativeSetup_Click AYNI kontrolü ve kurulumu
+                // bu fonksiyonu çağırmadan HEMEN ÖNCE yapıyor. WireSock'un WiX Burn tabanlı
+                // installer'ı (wiresock-secure-connect-x64-3.4.8.1.exe) ilk çalıştırmada bir
+                // sürücü değişikliği için "reboot pending" durumu bırakırsa, installer'ın AYNI
+                // oturumda İKİNCİ kez /S /norestart ile çalıştırılması Windows Installer'ın kendi
+                // bekleyen-yeniden-başlatma kontrolünü tetikleyip /norestart'ı görmezden gelerek
+                // ONAY SORMADAN yeniden başlatma başlatabiliyordu (Standart Kurulum akışında bu
+                // ikinci çağrı hiç yoktu, o yüzden orada sorun yaşanmıyordu). Tekrarlanan kontrol
+                // kaldırıldı -- WireSock kurulumu artık SADECE çağıran tarafta, bir kez yapılıyor.
 
-                // Mevcut WireSock kurulumunu kaldır - /res klasöründeki dosyayı kullan
-                File.AppendAllText(logPath, "Mevcut WireSock kurulumu kaldırılıyor...\n");
-                
-                var localUninstallPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-secure-connect-x64-2.4.23.1.exe");
-                
-                if (File.Exists(localUninstallPath))
-                {
-                    try
-                    {
-                        // Mevcut sürümü kaldır
-                        File.AppendAllText(logPath, "Mevcut WireSock sürümü kaldırılıyor...\n");
-                        var uninstallProcess = new Process
-                        {
-                            StartInfo = new ProcessStartInfo
-                            {
-                                FileName = localUninstallPath,
-                                Arguments = "/uninstall /S",
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true,
-                                Verb = "runas"
-                            }
-                        };
-
-                        uninstallProcess.Start();
-                        await uninstallProcess.WaitForExitAsync();
-                        File.AppendAllText(logPath, $"Mevcut WireSock sürümü kaldırma işlemi tamamlandı. Exit Code: {uninstallProcess.ExitCode}\n");
-                    }
-                    catch (Exception ex)
-                    {
-                        File.AppendAllText(logPath, $"Mevcut sürüm kaldırma hatası: {ex.Message}\n");
-                        Debug.WriteLine($"Mevcut sürüm kaldırma hatası: {ex.Message}");
-                        // Hata olsa bile devam et
-                    }
-                }
-                else
-                {
-                    File.AppendAllText(logPath, $"WireSock kaldırma dosyası bulunamadı: {localUninstallPath}\n");
-                }
-
-                // 1.4.7.1 sürümünü indir ve kur
-                File.AppendAllText(logPath, "WireSock 1.4.7.1 sürümü indiriliyor...\n");
-                var tempDir = Path.Combine(Path.GetTempPath(), "SplitWireTurkey");
-                if (!Directory.Exists(tempDir))
-                    Directory.CreateDirectory(tempDir);
-                var setupPath = Path.Combine(tempDir, "wiresock-legacy.msi");
-                var resSetupPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-vpn-client-x64-1.4.7.1.msi");
-
-                bool downloadSuccess = false;
-                
-                // Önce /res klasöründen dosyayı kopyalamayı dene
-                if (File.Exists(resSetupPath))
-                {
-                    File.AppendAllText(logPath, "1.4.7.1 sürümü /res klasöründen kopyalanıyor...\n");
-                    File.Copy(resSetupPath, setupPath, true);
-                    downloadSuccess = true;
-                }
-                else
-                {
-                    // /res klasöründe yoksa GitHub'dan indirmeyi dene
-                    File.AppendAllText(logPath, "1.4.7.1 sürümü GitHub'dan indiriliyor...\n");
-                    var downloadUrl = "https://github.com/cagritaskn/SplitWire-Turkey/raw/main/deploy/wiresock-vpn-client-x64-1.4.7.1.msi";
-                    
-                    try
-                    {
-                        using (var client = new System.Net.Http.HttpClient())
-                        {
-                            var response = await client.GetAsync(downloadUrl);
-                            response.EnsureSuccessStatusCode();
-                            
-                            using (var fileStream = File.Create(setupPath))
-                            {
-                                await response.Content.CopyToAsync(fileStream);
-                            }
-                        }
-                        downloadSuccess = true;
-                        File.AppendAllText(logPath, "1.4.7.1 sürümü GitHub'dan başarıyla indirildi.\n");
-                    }
-                    catch (Exception ex)
-                    {
-                        File.AppendAllText(logPath, $"GitHub'dan indirme hatası: {ex.Message}\n");
-                        Debug.WriteLine($"GitHub'dan indirme hatası: {ex.Message}");
-                        
-                        // GitHub'dan da indirilemezse yerel dosyayı dene
-                        File.AppendAllText(logPath, "Yerel dosya deneniyor...\n");
-                        var localSetupPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wiresock-vpn-client-x64-1.4.7.1.msi");
-                        if (File.Exists(localSetupPath))
-                        {
-                            File.Copy(localSetupPath, setupPath, true);
-                            downloadSuccess = true;
-                            File.AppendAllText(logPath, "Yerel dosya kullanılıyor.\n");
-                            System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "using_local_file"), 
-                                LanguageManager.GetText("messages", "info_title"), MessageBoxButton.OK, MessageBoxImage.Information);
-                        }
-                        else
-                        {
-                            File.AppendAllText(logPath, "1.4.7.1 sürümü bulunamadı.\n");
-                            System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "file_not_found"), 
-                                LanguageManager.GetText("messages", "file_not_found_title"), MessageBoxButton.OK, MessageBoxImage.Error);
-                            return;
-                        }
-                    }
-                }
-
-                if (!downloadSuccess)
-                {
-                    File.AppendAllText(logPath, "1.4.7.1 sürümü indirilemedi.\n");
-                            System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "download_failed"), 
-                                LanguageManager.GetText("messages", "download_failed_title"), MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-
-                File.AppendAllText(logPath, "1.4.7.1 sürümü başarıyla indirildi.\n");
-                // En uygun kurulum yolunu belirle
-                var installPath = GetBestInstallPath();
-                File.AppendAllText(logPath, $"Kurulum yolu: {installPath}\n");
-
-                // MSI kurulum parametrelerini dene
-                var msiArgsList = new[]
-                {
-                    $"/i \"{setupPath}\" TARGETDIR=\"{installPath}\" /quiet /norestart",
-                    $"/i \"{setupPath}\" TARGETDIR=\"{installPath}\" /passive /norestart",
-                    $"/i \"{setupPath}\" TARGETDIR=\"{installPath}\" /qn",
-                    $"/i \"{setupPath}\" /quiet /norestart",
-                    $"/i \"{setupPath}\" /passive /norestart",
-                    $"/i \"{setupPath}\" /qn"
-                };
-
-                bool msiInstallSuccess = false;
-                File.AppendAllText(logPath, "MSI sessiz kurulum deneniyor...\n");
-                
-                foreach (var msiArgs in msiArgsList)
-                {
-                    try
-                    {
-                        File.AppendAllText(logPath, $"MSI kurulum parametresi deneniyor: {msiArgs}\n");
-                        var process = new Process
-                        {
-                            StartInfo = new ProcessStartInfo
-                            {
-                                FileName = "msiexec",
-                                Arguments = msiArgs,
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true,
-                                Verb = "runas" // Yönetici izni ile çalıştır
-                            }
-                        };
-
-                        process.Start();
-                        await process.WaitForExitAsync();
-
-                        if (process.ExitCode == 0)
-                        {
-                            File.AppendAllText(logPath, "MSI sessiz kurulum başarılı.\n");
-                            
-                            msiInstallSuccess = true;
-                            break;
-                        }
-                        else
-                        {
-                            // Check if WireSock is actually installed despite the error
-                            if (_wireSockService.IsWireSockInstalled())
-                            {
-                                File.AppendAllText(logPath, $"MSI kurulum başarılı (Exit Code: {process.ExitCode}).\n");
-                                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "msi_install_success").Replace("{0}", process.ExitCode.ToString()), 
-                                    LanguageManager.GetText("messages", "install_completed_title"), MessageBoxButton.OK, MessageBoxImage.Information);
-                                msiInstallSuccess = true;
-                                break;
-                            }
-                            else
-                            {
-                                File.AppendAllText(logPath, $"MSI kurulum başarısız. Exit Code: {process.ExitCode}\n");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        File.AppendAllText(logPath, $"MSI kurulum hatası: {ex.Message}\n");
-                        // Bu parametre çalışmadı, diğerini dene
-                        continue;
-                    }
-                }
-
-                // MSI kurulum başarısız olursa normal kurulumu dene
-                if (!msiInstallSuccess)
-                {
-                    File.AppendAllText(logPath, "MSI sessiz kurulum başarısız, normal kurulum deneniyor...\n");
-                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "silent_install_failed"), 
-                            LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
-                    
-                    var normalProcess = new Process
-                    {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = setupPath,
-                            UseShellExecute = true,
-                            Verb = "runas"
-                        }
-                    };
-
-                    normalProcess.Start();
-                    await normalProcess.WaitForExitAsync();
-                    
-                    File.AppendAllText(logPath, "Normal kurulum tamamlandı.\n");
-                    
-                    // Check if WireSock is actually installed
-                    if (_wireSockService.IsWireSockInstalled())
-                    {
-                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "install_success"), 
-                            LanguageManager.GetText("messages", "install_completed_title"), MessageBoxButton.OK, MessageBoxImage.Information);
-                    }
-                    else
-                    {
-                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "install_success_unverified"), 
-                            LanguageManager.GetText("messages", "install_completed_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
-                    }
-                }
-                
-                File.AppendAllText(logPath, "WireSock durumu güncellendi.\n");
-                
-                // Kısa bir bekleme süresi ekle
-                await Task.Delay(2000);
-                
-                // Hizmet kurulumu yap
+                // 5. WireGuard profili oluşturuluyor
                 File.AppendAllText(logPath, "WireGuard profili oluşturuluyor...\n");
                 
                 // Tarayıcı tünelleme ayarını kontrol et
@@ -4444,22 +4752,22 @@ namespace SplitWireTurkey
                         var enableRepeater = Dispatcher.Invoke(() => chkWireSockRepeater.IsChecked == true);
                         if (enableRepeater)
                         {
-                        File.AppendAllText(logPath, "WireSock Refresh görevi oluşturuluyor...\n");
-                        var refreshTaskSuccess = await CreateWireSockRefreshTaskAsync();
-                        if (refreshTaskSuccess)
-                        {
-                            File.AppendAllText(logPath, "WireSock Refresh görevi başarıyla oluşturuldu.\n");
-                        }
-                        else
-                        {
-                            File.AppendAllText(logPath, "UYARI: WireSock Refresh görevi oluşturulamadı.\n");
+                            File.AppendAllText(logPath, "WireSock Refresh görevi oluşturuluyor...\n");
+                            var refreshTaskSuccess = await CreateWireSockRefreshTaskAsync();
+                            if (refreshTaskSuccess)
+                            {
+                                File.AppendAllText(logPath, "WireSock Refresh görevi başarıyla oluşturuldu.\n");
+                            }
+                            else
+                            {
+                                File.AppendAllText(logPath, "UYARI: WireSock Refresh görevi oluşturulamadı.\n");
                             }
                         }
                         else
                         {
                             File.AppendAllText(logPath, "WireSock Refresh görevi oluşturulmayacak (switch kapalı).\n");
                         }
-                        
+
                         // WireSock kısayolunu sil
                         File.AppendAllText(logPath, "WireSock kısayolu temizleniyor...\n");
                         RemoveWireSockShortcut(logPath);
@@ -4510,6 +4818,11 @@ namespace SplitWireTurkey
 
             if (result == MessageBoxResult.Yes)
             {
+                // ÖNEMLİ: kullanıcı burada yeniden başlatmayı AÇIKÇA onayladı -- kurulum akışının
+                // başında koyduğumuz kendi shutdown-block'umuzu önce kaldırıyoruz, yoksa
+                // "shutdown /r /t 5" zamanlayıcısı dolduğunda Windows'un kendi kendimizi
+                // engellememiz gibi saçma bir duruma düşmemesi için (bkz. BlockShutdownForInstall).
+                UnblockShutdownForInstall();
                 // Şimdi yeniden başlat
                 RestartSystem();
                 ShowLoading(false);
@@ -4791,7 +5104,7 @@ try {{
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.1. WireSock kurulum dosyası kontrol ediliyor...\n");
                 
                 // Doğrudan /res klasöründeki dosyayı kullan
-                var localSetupPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-secure-connect-x64-2.4.23.1.exe");
+                var localSetupPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-secure-connect-x64-3.4.8.1.exe");
                 
                 if (!File.Exists(localSetupPath))
                 {
@@ -4808,19 +5121,72 @@ try {{
                 var installPath = GetBestInstallPath();
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.2. Kurulum yolu belirlendi: {installPath}\n");
 
+                // ÖNEMLİ (kullanıcının "WireSock hizmeti yine kurulmadı" bildirimiyle canlı testte
+                // bulunan GERÇEK kök sebep -- internet araştırmasıyla ve WiX Burn loglarıyla
+                // doğrulandı): "wiresock-secure-connect-x64-3.4.8.1.exe /S /norestart" HER ZAMAN
+                // exit code 0 ("başarılı") dönüyor, AMA WireSock zaten bir kere kurulmuş VE bizim
+                // (ya da başka bir motorun temiz kurulumunun) sonradan ham "sc delete
+                // WireSockAppService/WireSockConnectService" ile servisleri SİLMİŞ olması durumunda,
+                // Windows Installer'ın kendi iç paket/özellik durumu (MSI feature state) hâlâ
+                // "FEAT_WiresockConnectService: state=Local" (yani "zaten kurulu") diye
+                // İŞARETLİ KALIYOR -- Burn log'unda "execute action: None" olarak görülüyor (bkz.
+                // %TEMP%\WireSock_Secure_Connect_*.log). Yani installer'ı SADECE /S ile tekrar
+                // çalıştırmak HİÇBİR ŞEY YAPMIYOR (servisleri asla yeniden kaydetmiyor), MSI zaten
+                // kurulu sandığı için. Dahası, bu tutarsız durumda installer'ı tekrar çalıştırmak
+                // bazen Burn'ün "zaten kurulu -- onar/kaldır" bakım ekranını GÖRÜNÜR şekilde
+                // açabiliyor (canlı testte gözlemlendi), /S'e rağmen.
+                //
+                // ÇÖZÜM: asıl kurulumdan ÖNCE, Burn bootstrapper'ının KENDİ "/uninstall /S
+                // /norestart" anahtarıyla önce SESSİZCE kaldırıyoruz (zaten kurulu değilse bu adım
+                // zararsızca hiçbir şey yapmaz) -- bu, Windows Installer'ın iç durumunu GERÇEKTEN
+                // "kurulu değil"e sıfırlıyor. Ancak bundan SONRA çalıştırılan düz "/S /norestart"
+                // kurulumu artık GERÇEK bir ilk kurulum gibi davranıyor ve servisleri doğru
+                // şekilde kaydediyor (kullanıcının kendi elle kaldır+yeniden kur denemesiyle de
+                // canlı olarak doğrulandı: WireSockAppService/WireSockConnectService RUNNING oldu).
+                File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.2.b. Olası tutarsız/yarım kurulum durumunu temizlemek için önce sessiz kaldırma deneniyor...\n");
+                try
+                {
+                    var uninstallProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = localSetupPath,
+                            Arguments = "/uninstall /S /norestart",
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        }
+                    };
+                    uninstallProcess.Start();
+                    await uninstallProcess.WaitForExitAsync();
+                    File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.2.b. Ön-kaldırma tamamlandı. Exit Code: {uninstallProcess.ExitCode}\n");
+                }
+                catch (Exception preUninstallEx)
+                {
+                    // Zaten kurulu değilse veya başka bir sebeple başarısız olursa görmezden gel --
+                    // bu adım sadece olası bozuk bir önceki kuruluma karşı önlem.
+                    File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.2.b. Ön-kaldırma adımı atlandı/hata (yok sayılıyor): {preUninstallEx.Message}\n");
+                }
+
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3. WireSock kurulum işlemi başlatılıyor...\n");
-                
+
                 // Sadece /S parametresi ile kurulum yap
                 try
                 {
-                    File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3.1. Kurulum komutu: {localSetupPath} /S\n");
-                    
+                    // WireSock 3.x kurulumu WiX Burn bootstrapper kullanıyor. /norestart olmadan,
+                    // UI gizliyken (silent) sürücü (WinDivert) kurulumu yeniden başlatma gerektirirse
+                    // Burn bilgisayarı ONAY SORMADAN kendiliğinden yeniden başlatıyor. /norestart ile
+                    // bu davranış engelleniyor; yeniden başlatma gerekiyorsa 3010 exit code'u ile bize
+                    // haber veriliyor ve onay diyaloğunu biz (ShowRestartMessage) gösteriyoruz.
+                    File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3.1. Kurulum komutu: {localSetupPath} /S /norestart\n");
+
                     var process = new Process
                     {
                         StartInfo = new ProcessStartInfo
                         {
                             FileName = localSetupPath,
-                            Arguments = "/S",
+                            Arguments = "/S /norestart",
                             UseShellExecute = false,
                             CreateNoWindow = true,
                             RedirectStandardOutput = true,
@@ -4837,6 +5203,17 @@ try {{
                     if (process.ExitCode == 0)
                     {
                         File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3.5. Kurulum başarılı (Exit Code: 0)\n");
+                        ExecuteCommand("net", "start WireSockAppService");
+                        ExecuteCommand("net", "start WireSockConnectService");
+                    }
+                    else if (process.ExitCode == 3010)
+                    {
+                        // ERROR_SUCCESS_REBOOT_REQUIRED: Kurulum başarılı, ancak sürücü değişikliği
+                        // için yeniden başlatma gerekiyor. Yeniden başlatma /norestart sayesinde
+                        // burada değil, standart akışın sonunda ShowRestartMessage() ile onaylı yapılacak.
+                        File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3.5. Kurulum başarılı, yeniden başlatma gerekiyor (Exit Code: 3010)\n");
+                        ExecuteCommand("net", "start WireSockAppService");
+                        ExecuteCommand("net", "start WireSockConnectService");
                     }
                     else
                     {
@@ -4846,6 +5223,8 @@ try {{
                         if (_wireSockService.IsWireSockInstalled())
                         {
                             File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2.2.3.6. Kurulum doğrulandı (Exit Code: {process.ExitCode})\n");
+                            ExecuteCommand("net", "start WireSockAppService");
+                            ExecuteCommand("net", "start WireSockConnectService");
                         }
                         else
                         {
@@ -5020,7 +5399,7 @@ try {{
                 // Merkezi boyut hesaplama ve güncelleme
                 AnimateWindowHeight(_byeDPIHeight, TimeSpan.FromMilliseconds(400));
                 
-                this.Width = 600;
+                this.Width = 680;
                 
                 // Cache'den hızlı kontrol yap
                 CheckByeDPIRemoveButtonVisibilityFromCache();
@@ -5028,7 +5407,7 @@ try {{
                 // ByeDPI UI durumunu güncelle
                 UpdateByeDPIUIState();
             }
-            else if (TabControl.SelectedIndex == 4) // Onarım sekmesi
+            else if (TabControl.SelectedIndex == 5) // Onarım sekmesi
             {
                 // Onarım sekmesi için pencere boyutunu ayarla
                 // Önceki animasyonları durdur ve doğrudan boyut ayarla
@@ -5037,7 +5416,7 @@ try {{
                 // Merkezi boyut hesaplama ve güncelleme
                 AnimateWindowHeight(_discordHeight, TimeSpan.FromMilliseconds(400));
                 
-                this.Width = 600;
+                this.Width = 680;
                 
                 // Discord durumunu kontrol et
                 CheckDiscordStatus();
@@ -5054,12 +5433,29 @@ try {{
                 // Merkezi boyut hesaplama ve güncelleme
                 UpdateZapretWindowSize();
                 
-                this.Width = 600;
+                this.Width = 680;
                 
                 // Cache'den hızlı kontrol yap
                 CheckZapretRemoveButtonVisibilityFromCache();
             }
-            else if (TabControl.SelectedIndex == 3) // GoodbyeDPI sekmesi
+            else if (TabControl.SelectedIndex == 3) // Zapret2 sekmesi
+            {
+                // Zapret2 sekmesi açıldığında dosyaları kontrol et ve gerekirse kopyala
+                CheckAndCopyZapret2FilesIfNeeded();
+
+                // Zapret2 sekmesi için pencere boyutunu ayarla
+                // Önceki animasyonları durdur ve doğrudan boyut ayarla
+                this.BeginAnimation(HeightProperty, null);
+
+                // Merkezi boyut hesaplama ve güncelleme
+                UpdateZapret2WindowSize();
+
+                this.Width = 680;
+
+                // Cache'den hızlı kontrol yap
+                CheckZapret2RemoveButtonVisibilityFromCache();
+            }
+            else if (TabControl.SelectedIndex == 4) // GoodbyeDPI sekmesi
             {
                 // GoodbyeDPI sekmesi açıldığında dosyaları kontrol et ve gerekirse kopyala
                 CheckAndCopyGoodbyeDPIFilesIfNeeded();
@@ -5071,12 +5467,12 @@ try {{
                 // Switch durumlarını kontrol et ve boyutu hesapla
                 UpdateGoodbyeDPIWindowSize();
                 
-                this.Width = 600;
+                this.Width = 680;
                 
                 // Cache'den hızlı kontrol yap
                 CheckGoodbyeDPIRemoveButtonVisibilityFromCache();
             }
-            else if (TabControl.SelectedIndex == 5) // Gelişmiş sekmesi
+            else if (TabControl.SelectedIndex == 6) // Gelişmiş sekmesi
             {
                 // Gelişmiş sekmesi için pencere boyutunu ayarla (yeni butonlar için artırıldı)
                 // Önceki animasyonları durdur ve doğrudan boyut ayarla
@@ -5085,7 +5481,7 @@ try {{
                 // Merkezi boyut hesaplama ve güncelleme
                 AnimateWindowHeight(_advancedHeight, TimeSpan.FromMilliseconds(400));
                 
-                    this.Width = 600;
+                    this.Width = 680;
                 
                 // Cache'den hızlı güncelleme yap
                 if (_serviceStatusCache.Count > 0)
@@ -5107,7 +5503,7 @@ try {{
                 // Merkezi boyut hesaplama ve güncelleme
                 UpdateMainPageWindowSize();
                 
-                this.Width = 600;
+                this.Width = 680;
             }
             
             // Overlay görünürlüğünü sekmeye göre güncelle
@@ -5651,18 +6047,27 @@ try {{
                 try
                 {
                     var logPath = GetLogPath();
-                    
-                    // Hizmetleri durdur ve kaldır
-                    var services = new[] { "GoodbyeDPI", "WinDivert", "wiresock-client-service" };
-                    
+
+                    // WireSock'u TAM olarak kaldır (tünel + WireSockRefresh yineleyici görevi +
+                    // hem modern hem eski servis adları) -- bkz. RemoveWireSockCompletely.
+                    // Bunu ayrı ele alıyoruz çünkü tek başına "wiresock-client-service" adı
+                    // WireSock Secure Connect 3.x'in gerçek servislerini (WireSockAppService/
+                    // WireSockConnectService) kapsamıyordu ve WireSockRefresh görevi aktifse
+                    // bu servisi birkaç dakika içinde yeniden başlatabiliyordu.
+                    File.AppendAllText(logPath, "WireSock tamamen kaldırılıyor...\n");
+                    RemoveWireSockCompletely(logPath);
+
+                    // Diğer hizmetleri durdur ve kaldır
+                    var services = new[] { "GoodbyeDPI", "WinDivert" };
+
                     foreach (var service in services)
                     {
                         File.AppendAllText(logPath, $"{service} hizmeti kaldırılıyor...\n");
-                        
+
                         // Hizmeti durdur
                         var stopResult = ExecuteCommand("net", $"stop {service}");
                         File.AppendAllText(logPath, $"{service} durdurma sonucu: {stopResult}\n");
-                        
+
                         // Hizmeti kaldır
                         var removeResult = ExecuteCommand("sc", $"delete {service}");
                         File.AppendAllText(logPath, $"{service} kaldırma sonucu: {removeResult}\n");
@@ -5690,28 +6095,63 @@ try {{
                     
                     if (File.Exists(proxifyrePath))
                     {
-                        File.AppendAllText(logPath, "ProxiFyre kurulumu başlatılıyor...\n");
-                        var result = ExecuteCommand(proxifyrePath, "install");
-                        File.AppendAllText(logPath, $"ProxiFyre kurulum sonucu: {result}\n");
-                        
-                        // ProxiFyreService'in başlangıç türünü Otomatik olarak ayarla
-                        File.AppendAllText(logPath, "ProxiFyreService başlangıç türü Otomatik olarak ayarlanıyor...\n");
-                        var configResult = ExecuteCommand("sc", "config ProxiFyreService start= auto ");
-                        File.AppendAllText(logPath, $"ProxiFyreService başlangıç türü ayarlama sonucu: {configResult}\n");
-                        
-                        return true; // Hata mesajlarını kaldırdık, her zaman true döndür
+                        // NOT: ProxiFyre 2.6.1, LocalSystem servisini SADECE "korumalı" bir klasörden
+                        // kurup çalıştırıyor: kendi klasörünün ACL'sinde SYSTEM/Administrators/TrustedInstaller
+                        // dışında hiçbir kimliğe Write/Delete/ChangePermissions/TakeOwnership hakkı veren
+                        // BİR ACE bile bulunmamalı (miras alınan "CREATOR OWNER" dahil). Windows'ta klasörler
+                        // varsayılan olarak (Program Files'ın kendisi dahil) hep bu miras alınan CREATOR OWNER
+                        // girdisini taşıdığından, önce bu klasörün ACL'sini sıkılaştırıp (miras kaldır, sadece
+                        // SYSTEM+Administrators Tam Denetim) ProxiFyre.exe'nin kendi kontrolünü geçmesini
+                        // sağlıyoruz. Bu adım sadece "install" komutunda değil, servis HER başlatıldığında
+                        // (SCM tarafından, interaktif olmayan şekilde) tekrar kontrol ediliyor; bu yüzden
+                        // hizmeti Topshelf'in kendi "install" komutuyla değil (o da aynı kontrolden geçmesi
+                        // gerekiyor), ByeDPI/zapret'te yaptığımız gibi doğrudan sc ile kuruyoruz.
+                        // NOT: (OI)(CI)F bayrakları sadece KLASÖRLER için anlamlıdır. Bunları /T ile
+                        // doğrudan alt DOSYALARA da uygulamaya çalışmak (icacls'in bilinen bir tuhaflığı),
+                        // dosyalarda BOŞ bir ACL bırakıp SYSTEM dahil herkesi erişimden mahrum bırakıyor
+                        // (canlı olarak doğrulandı: dosya çalıştırılamaz hale geliyor). Doğru sıra: önce
+                        // tüm ağacı mirasa döndür (/reset /T), sonra SADECE klasörün kendi ACL'sini
+                        // sıkılaştır (miras kaldır + sadece SYSTEM+Administrators Tam Denetim) - dosyalar
+                        // bu düzeltilmiş ACL'yi klasörden otomatik miras alır.
+                        var proxifyreDir = Path.GetDirectoryName(proxifyrePath) ?? string.Empty;
+                        File.AppendAllText(logPath, "ProxiFyre klasör izinleri (ACL) sıkılaştırılıyor...\n");
+                        var resetResult = ExecuteCommand("icacls", $"\"{proxifyreDir}\" /reset /T /C");
+                        File.AppendAllText(logPath, $"ACL sıfırlama sonucu: {resetResult}\n");
+                        var icaclsResult = ExecuteCommand("icacls",
+                            $"\"{proxifyreDir}\" /inheritance:r /grant:r \"*S-1-5-18:(OI)(CI)F\" \"*S-1-5-32-544:(OI)(CI)F\"");
+                        File.AppendAllText(logPath, $"ACL sıkılaştırma sonucu: {icaclsResult}\n");
+
+                        File.AppendAllText(logPath, "ProxiFyre kurulumu başlatılıyor (doğrudan sc create ile)...\n");
+
+                        // Varsa eski kaydı temizle (hata mesajları önemsiz, hizmet yoksa 1060 döner)
+                        ExecuteCommand("sc", "stop ProxiFyreService");
+                        ExecuteCommand("sc", "delete ProxiFyreService");
+
+                        // depend= NDISRD: ProxiFyre'nin kendi Topshelf kurulumunun da ayarladığı bağımlılık
+                        // (Windows Packet Filter sürücüsü) - önyükleme sırasında doğru sırada başlaması için.
+                        var createResult = ExecuteCommand("sc", $"create ProxiFyreService binPath= \"{proxifyrePath}\" start= auto depend= NDISRD DisplayName= \"ProxiFyre\"");
+                        File.AppendAllText(logPath, $"ProxiFyreService oluşturma sonucu: {createResult}\n");
+
+                        if (createResult != 0)
+                        {
+                            return false;
+                        }
+
+                        ExecuteCommand("sc", "description ProxiFyreService \"ProxiFyre SOCKS5/HTTP proxy per-app tunneling service\"");
+
+                        return true;
                     }
                     else
                     {
                         File.AppendAllText(logPath, "ProxiFyre.exe dosyası bulunamadı.\n");
-                        return true; // Hata mesajlarını kaldırdık
+                        return false;
                     }
                 }
                 catch (Exception ex)
                 {
                     var logPath = GetLogPath();
                     File.AppendAllText(logPath, $"ProxiFyre kurulum hatası: {ex.Message}\n");
-                    return true; // Hata mesajlarını kaldırdık
+                    return false;
                 }
             });
         }
@@ -5921,14 +6361,76 @@ try {{
             return Path.Combine(logsDirectory, "dns_debug.log");
         }
 
+        private static readonly object _zapretLogLock = new object();
+
+        /// <summary>
+        /// zapret.log/zapret2.log dosyasına eş zamanlı yazımları güvenli hale getirir.
+        /// Otomatik Kurulum sırasında arka planda çalışan process gizleme görevi de aynı dosyaya
+        /// sürekli yazdığından, düz File.AppendAllText çağrıları "dosya başka bir işlem tarafından
+        /// kullanılıyor" hatasıyla sonuçlanabiliyordu. Kilit + kısa yeniden deneme bu çakışmayı giderir.
+        /// </summary>
+        private void AppendLogSafe(string path, string text)
+        {
+            const int maxAttempts = 5;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    lock (_zapretLogLock)
+                    {
+                        File.AppendAllText(path, text);
+                    }
+                    return;
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(50);
+                }
+                catch (IOException)
+                {
+                    // Son denemede de başarısız olursa log yazımını sessizce atla,
+                    // asıl işlemi (kurulum/kaldırma) bu yüzden başarısız kılma
+                    Debug.WriteLine($"AppendLogSafe: {path} dosyasına yazılamadı (dosya kilitli).");
+                }
+            }
+        }
+
+        /// <summary>
+        /// blockcheck.log dosyasını okur. Cygwin'in "tee" ve "unix2dos" araçları bash süreci kapandıktan
+        /// sonra da bir süre dosyayı açık tutabildiğinden, "dosya başka bir işlem tarafından kullanılıyor"
+        /// hatasına karşı kısa aralıklarla birkaç kez yeniden dener.
+        /// </summary>
+        private async Task<string> ReadBlockcheckLogWithRetryAsync(string path)
+        {
+            const int maxAttempts = 40;
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    // FileShare.ReadWrite: tee/unix2dos dosyayı hâlâ açık tutuyor olsa bile,
+                    // paylaşım modu izin veriyorsa okuyabilmeyi dener
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var reader = new StreamReader(stream);
+                    return await reader.ReadToEndAsync();
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    await Task.Delay(500);
+                }
+            }
+
+            // Son deneme - başarısız olursa gerçek exception yükselsin
+            return await File.ReadAllTextAsync(path);
+        }
+
         private string GetZapretLogPath()
         {
             var logsDirectory = GetAppDataLogsDirectory();
             var logPath = Path.Combine(logsDirectory, "zapret.log");
-            
+
             // Log dosyasının başına sürüm bilgisini ekle
             AddVersionHeaderToLog(logPath);
-            
+
             return logPath;
         }
 
@@ -5965,21 +6467,31 @@ try {{
             {
                 var localZapretPath = GetLocalAppDataZapretPath();
                 var zapretWinwsPath = Path.Combine(localZapretPath, "zapret-winws");
-                
+
                 // Temel klasör ve dosya kontrolü
-                if (!Directory.Exists(zapretWinwsPath) || 
-                    !File.Exists(Path.Combine(zapretWinwsPath, "presets.txt")))
+                if (!Directory.Exists(zapretWinwsPath) ||
+                    !File.Exists(Path.Combine(zapretWinwsPath, "presets.txt")) ||
+                    !File.Exists(Path.Combine(zapretWinwsPath, "winws.exe")))
                 {
                     return false;
                 }
-                
-                // arm64/WinDivert64.sys dosyasının varlığını kontrol et
-                var arm64WinDivertPath = Path.Combine(localZapretPath, "arm64", "WinDivert64.sys");
-                if (!File.Exists(arm64WinDivertPath))
+
+                // NOT: "splitwire-exclude.txt" (dışlama listesi) sonradan eklendi -- eski bir
+                // LocalAppData önbelleğinde bu dosya hiç yok olabilir; varlığını da kontrol
+                // ederek eski önbelleklerin yeniden kopyalanmasını sağlıyoruz.
+                if (!File.Exists(Path.Combine(zapretWinwsPath, "splitwire-exclude.txt")) ||
+                    !File.Exists(Path.Combine(zapretWinwsPath, "splitwire-exclude.backup.txt")))
                 {
                     return false;
                 }
-                
+
+                // blockcheck/blockcheck.cmd dosyasının varlığını kontrol et
+                var blockcheckCmdPath = Path.Combine(localZapretPath, "blockcheck", "blockcheck.cmd");
+                if (!File.Exists(blockcheckCmdPath))
+                {
+                    return false;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -6011,29 +6523,29 @@ try {{
                 ShowLoading(true);
 
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret sekmesi açıldığında dosya kopyalama işlemi başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret sekmesi açıldığında dosya kopyalama işlemi başlatılıyor...\n");
 
                 // Dosyaları kopyala
                 var success = await EnsureZapretFilesExist();
                 
                 if (success)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarılı. Preset'ler yükleniyor...\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarılı. Preset'ler yükleniyor...\n");
                     
                     // Preset'leri yeniden yükle
                     LoadZapretPresets();
                     
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Preset'ler başarıyla yüklendi.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Preset'ler başarıyla yüklendi.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarısız!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarısız!\n");
                 }
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret sekmesi açıldığında hata: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret sekmesi açıldığında hata: {ex.Message}\n");
                 
                 System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_copy_error").Replace("{0}", ex.Message), 
                     LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -6052,7 +6564,7 @@ try {{
             
             try
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme başlatıldı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme başlatıldı.\n");
                 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -6072,11 +6584,11 @@ try {{
             catch (OperationCanceledException)
             {
                 // Normal cancellation - beklenen durum
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i iptal edildi.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i iptal edildi.\n");
             }
             catch (Exception ex)
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme hatası: {ex.Message}\n");
             }
         }
 
@@ -6111,7 +6623,7 @@ try {{
                                 if (success)
                                 {
                                     hiddenProcesses.Add(process.Id);
-                                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizlendi: {processName} (PID: {process.Id})\n");
+                                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizlendi: {processName} (PID: {process.Id})\n");
                                 }
                             }
                         }
@@ -6120,14 +6632,14 @@ try {{
                             // Process gizleme hatası - devam et
                             if (!ex.Message.Contains("has exited"))
                             {
-                                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme hatası ({processName}, PID: {process.Id}): {ex.Message}\n");
+                                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme hatası ({processName}, PID: {process.Id}): {ex.Message}\n");
                             }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process arama hatası ({processName}): {ex.Message}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process arama hatası ({processName}): {ex.Message}\n");
                 }
             }
         }
@@ -6331,10 +6843,86 @@ try {{
             }
         }
 
+        // TÜM kurulum/tek-seferlik/blockcheck akışlarının ortak DNS giriş noktası. "DNS ve DoH
+        // ayarlarını her kurulumda gerçekleştir" switch'i açık olan HER çağrı noktası zaten bu
+        // fonksiyonu çağırıyor (14 farklı yer) -- bu yüzden dnscrypt-proxy "ek katman" switch'ini
+        // buraya, TEK bir yere entegre ediyoruz: switch açıksa önce dnscrypt-proxy'yi kurup/
+        // doğrulayıp adaptör DNS'ini 127.0.0.1 (+ yedek 8.8.8.8) yapmayı DENER; başarısız olursa
+        // (ör. servis başlamadı/doğrulanamadı) GÜVENLİ TARAFTA KALIP eskisi gibi native Windows
+        // DoH ayarına (8.8.8.8/9.9.9.9 + DoH şablonu) düşer -- kullanıcı asla DNS'siz kalmaz.
+        // ÖNEMLİ (kullanıcının açık talebi üzerine düzeltildi): "Gelişmiş" sekmesindeki
+        // "DNS Yöntemi" switch'i (chkDnscryptProxyEveryInstall) İKİ yöntem arasında KESİN,
+        // BİRBİRİNİ DIŞLAYAN bir seçim olmalı -- ya dnscrypt-proxy (127.0.0.1/::1) ya da
+        // Windows'un yerleşik sistem geneli DNS+DoH ayarı, ASLA ikisi birden. Eskiden burada
+        // dnscrypt-proxy kurulumu/doğrulaması BAŞARISIZ olursa (ör. VerifyDnscryptProxyRespondingAsync
+        // 6 denemede de yanıt alamazsa) kod SESSİZCE native DoH'a "geri dönüyordu" -- switch
+        // dnscrypt-proxy'de kalsa bile kullanıcının makinesinde Windows'un native DoH ayarları
+        // devreye giriyordu. Artık öyle bir sessiz geçiş YOK: switch dnscrypt-proxy'deyse SADECE
+        // dnscrypt-proxy denenir (başarısız olursa DNS'e hiç dokunulmaz, hata loglanır); switch
+        // kapalıysa SADECE native DoH ayarlanır, dnscrypt-proxy'ye hiç dokunulmaz.
         private async Task<bool> SetModernDNSSettingsAsync()
         {
+            var enableDnscryptProxy = Dispatcher.Invoke(() => chkDnscryptProxyEveryInstall?.IsChecked == true);
+            var dnscryptLogPath = GetStandardSetupLogPath();
+
+            if (enableDnscryptProxy)
+            {
+                AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS Yöntemi: dnscrypt-proxy (switch açık). dnscrypt-proxy kontrol ediliyor/kuruluyor...\n");
+                try
+                {
+                    var dnscryptOk = await InstallAndStartDnscryptProxyAsync(dnscryptLogPath);
+                    if (dnscryptOk)
+                    {
+                        var dnsOk = await SetDnscryptProxyDnsAsync(dnscryptLogPath);
+                        if (dnsOk)
+                        {
+                            AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] dnscrypt-proxy aktif, adaptör DNS'i 127.0.0.1 (IPv4) + ::1 (IPv6) olarak ayarlandı.\n");
+                            return true;
+                        }
+                    }
+                    AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: dnscrypt-proxy kurulamadı/doğrulanamadı. DNS Yöntemi switch'i dnscrypt-proxy'de olduğu için Windows'un native DoH ayarlarına GEÇİLMİYOR (kasıtlı -- iki yöntem asla bir arada olmamalı). Lütfen dnscrypt-proxy kurulumunu manuel kontrol edin veya DNS Yöntemi switch'ini Windows DoH'a çevirin.\n");
+                }
+                catch (Exception ex)
+                {
+                    AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: dnscrypt-proxy kurulum hatası ({ex.Message}). DNS Yöntemi switch'i dnscrypt-proxy'de olduğu için Windows'un native DoH ayarlarına GEÇİLMİYOR.\n");
+                }
+
+                return false;
+            }
+
+            AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS Yöntemi: Windows DoH (switch kapalı).\n");
+
+            // İki yöntem asla bir arada olmamalı: dnscrypt-proxy önceki bir kurulumdan kalma
+            // şekilde hâlâ çalışıyor olabilir (kasıtlı olarak normal "temiz kurulum"larda
+            // kaldırılmıyor -- bkz. PerformPreSetupCleanupAsync). Kullanıcı DNS Yöntemi'ni
+            // Windows DoH'a çevirdiyse, adaptör DNS'i artık 127.0.0.1 DEĞİL 8.8.8.8/9.9.9.9
+            // olacağından dnscrypt-proxy zaten fiilen devre dışı kalır, ama servisi de
+            // durdurup gereksiz yere arka planda çalışmasını (ve olası bir DNS sorgu
+            // yarışını) önlüyoruz.
+            try
+            {
+                if (IsServiceInstalled("dnscrypt-proxy"))
+                {
+                    var queryOut = ExecuteCommandString("sc", "query dnscrypt-proxy");
+                    if (queryOut.Contains("RUNNING"))
+                    {
+                        AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] dnscrypt-proxy hâlâ çalışıyor, Windows DoH ile çakışmaması için durduruluyor...\n");
+                        ExecuteCommand("sc", "stop dnscrypt-proxy");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(dnscryptLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] dnscrypt-proxy durdurma hatası (yok sayılıyor): {ex.Message}\n");
+            }
+
+            return await SetNativeDoHDnsSettingsAsync();
+        }
+
+        private async Task<bool> SetNativeDoHDnsSettingsAsync()
+        {
             var standardLogPath = GetStandardSetupLogPath();
-            
+
             try
             {
                 File.AppendAllText(standardLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3.2.1. DNS ayarları timeout ile başlatılıyor (60 saniye)...\n");
@@ -6363,22 +6951,17 @@ foreach ($adapter in $adapters) {
     
     Write-Host ""Adaptör: $adapterName (GUID: $adapterGuid)""
     
-    # IPv4 DNS ayarları
+    # IPv4 ve IPv6 DNS ayarları
     try {
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses '8.8.8.8', '9.9.9.9' -ErrorAction Stop
-        Write-Host ""IPv4 DNS ayarları başarılı: $adapterName""
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses '8.8.8.8', '9.9.9.9', '2001:4860:4860::8888', '2620:fe::9' -ErrorAction SilentlyContinue
+        netsh interface ip set dns ""$adapterName"" static 8.8.8.8 | Out-Null
+        netsh interface ip add dns ""$adapterName"" 9.9.9.9 index=2 | Out-Null
+        netsh interface ipv6 set dns ""$adapterName"" static 2001:4860:4860::8888 | Out-Null
+        netsh interface ipv6 add dns ""$adapterName"" 2620:fe::9 index=2 | Out-Null
+        Write-Host ""IPv4 ve IPv6 DNS ayarları başarılı: $adapterName""
     }
     catch {
-        Write-Host ""IPv4 DNS ayarları başarısız: $adapterName - $($_.Exception.Message)""
-    }
-    
-    # IPv6 DNS ayarları
-    try {
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv6 -ServerAddresses '2001:4860:4860::8888', '2620:fe::9' -ErrorAction Stop
-        Write-Host ""IPv6 DNS ayarları başarılı: $adapterName""
-    }
-    catch {
-        Write-Host ""IPv6 DNS ayarları başarısız: $adapterName - $($_.Exception.Message)""
+        Write-Host ""DNS ayarları başarısız: $adapterName - $($_.Exception.Message)""
     }
     
     # DoH ayarları için registry yolu
@@ -6443,7 +7026,7 @@ Write-Host ""DNS ayarları tamamlandı.""
 
                         // DNS ayarlarını doğrula
                         File.AppendAllText(logPath, "DNS ayarlarını doğrulama...\n");
-                        var verificationResult = VerifyDNSSettings();
+                        var verificationResult = VerifyDNSSettings(expectDoH: true);
                         if (verificationResult)
                         {
                             Debug.WriteLine("DNS ayarları doğrulandı.");
@@ -6512,6 +7095,180 @@ Write-Host ""DNS ayarları tamamlandı.""
             }
         }
 
+        #region DnscryptProxy
+
+        private string GetLocalAppDataDnscryptProxyPath()
+        {
+            var localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var path = Path.Combine(localAppDataPath, "SplitWire-Turkey", "dnscrypt-proxy");
+            if (!Directory.Exists(path))
+            {
+                Directory.CreateDirectory(path);
+            }
+            return path;
+        }
+
+        /// <summary>
+        /// dnscrypt-proxy'yi (kurulu değilse) kurar, otomatik başlangıç + çökerse otomatik
+        /// yeniden başlatma ayarlarını yapar, başlatır ve GERÇEKTEN bir DNS sorgusuna yanıt
+        /// verdiğini doğrular. Zaten kuruluysa kurulum adımını atlar (kullanıcı talebi).
+        /// Adaptör DNS'i BURADA değiştirilmiyor -- bu fonksiyon yalnızca servisin kendisiyle
+        /// ilgileniyor; DNS ayarı SetDnscryptProxyDnsAsync'te, sadece bu fonksiyon true
+        /// döndürürse (servis gerçekten yanıt veriyorsa) yapılıyor.
+        /// </summary>
+        private async Task<bool> InstallAndStartDnscryptProxyAsync(string logPath)
+        {
+            try
+            {
+                if (IsServiceInstalled("dnscrypt-proxy"))
+                {
+                    AppendLogSafe(logPath, "dnscrypt-proxy zaten kurulu, kurulum adımı atlanıyor.\n");
+                    var queryOut = ExecuteCommandString("sc", "query dnscrypt-proxy");
+                    if (!queryOut.Contains("RUNNING"))
+                    {
+                        AppendLogSafe(logPath, "dnscrypt-proxy servisi durmuş, başlatılıyor...\n");
+                        ExecuteCommand("sc", "start dnscrypt-proxy");
+                        await Task.Delay(1500);
+                    }
+                    return await VerifyDnscryptProxyRespondingAsync(logPath);
+                }
+
+                var sourcePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "dnscrypt-proxy");
+                if (!Directory.Exists(sourcePath))
+                {
+                    AppendLogSafe(logPath, "HATA: dnscrypt-proxy kaynak klasörü bulunamadı: " + sourcePath + "\n");
+                    return false;
+                }
+
+                var localPath = GetLocalAppDataDnscryptProxyPath();
+                var exePath = Path.Combine(localPath, "dnscrypt-proxy.exe");
+                if (!File.Exists(exePath) || !File.Exists(Path.Combine(localPath, "dnscrypt-proxy.toml")))
+                {
+                    AppendLogSafe(logPath, "dnscrypt-proxy dosyaları LocalAppData'ya kopyalanıyor...\n");
+                    await Task.Run(() => CopyDirectory(sourcePath, localPath));
+                }
+
+                if (!File.Exists(exePath))
+                {
+                    AppendLogSafe(logPath, "HATA: dnscrypt-proxy.exe kopyalanamadı.\n");
+                    return false;
+                }
+
+                AppendLogSafe(logPath, "dnscrypt-proxy servis olarak kuruluyor...\n");
+                var installResult = ExecuteCommand(exePath, "-service install");
+                AppendLogSafe(logPath, $"dnscrypt-proxy -service install sonucu: {installResult}\n");
+                if (installResult != 0 && !IsServiceInstalled("dnscrypt-proxy"))
+                {
+                    AppendLogSafe(logPath, "HATA: dnscrypt-proxy servisi kurulamadı.\n");
+                    return false;
+                }
+
+                // Otomatik başlangıç (bilgisayar her açıldığında dnscrypt-proxy hazır olsun).
+                ExecuteCommand("sc", "config dnscrypt-proxy start= auto");
+
+                // ÖNLEM: servis çökerse Windows'un kendisi otomatik olarak yeniden başlatır
+                // (5sn, 10sn, 60sn artan gecikmelerle, 3 deneme sonrası sayaç 24 saatte sıfırlanır).
+                ExecuteCommand("sc", "failure dnscrypt-proxy reset= 86400 actions= restart/5000/restart/10000/restart/60000");
+                ExecuteCommand("sc", "description dnscrypt-proxy \"SplitWire-Turkey - Sifreli DNS (dnscrypt-proxy) ek asim katmani\"");
+
+                AppendLogSafe(logPath, "dnscrypt-proxy servisi başlatılıyor...\n");
+                var startResult = ExecuteCommand("sc", "start dnscrypt-proxy");
+                AppendLogSafe(logPath, $"dnscrypt-proxy start sonucu: {startResult}\n");
+                await Task.Delay(1500);
+
+                // ÖNLEM: adaptör DNS'ini değiştirmeden ÖNCE servisin GERÇEKTEN bir DNS sorgusuna
+                // yanıt verdiğini doğruluyoruz -- başarısız olursa DNS hiç değiştirilmez, kullanıcı
+                // DNS'siz kalmaz (çağıran taraf native DoH ayarına geri döner).
+                return await VerifyDnscryptProxyRespondingAsync(logPath);
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(logPath, $"InstallAndStartDnscryptProxyAsync hatası: {ex.Message}\n");
+                return false;
+            }
+        }
+
+        private async Task<bool> VerifyDnscryptProxyRespondingAsync(string logPath)
+        {
+            for (int attempt = 1; attempt <= 6; attempt++)
+            {
+                var result = await Task.Run(() => ExecuteCommandString("nslookup", "discord.com 127.0.0.1"));
+                var responded = result.Contains("Address") &&
+                                 !result.Contains("timed out") &&
+                                 !result.Contains("server failed") &&
+                                 !result.Contains("can't find") &&
+                                 !result.Contains("No response");
+                if (responded)
+                {
+                    AppendLogSafe(logPath, $"dnscrypt-proxy doğrulama denemesi {attempt}: BAŞARILI (gerçek bir DNS sorgusuna yanıt verdi).\n");
+                    return true;
+                }
+                AppendLogSafe(logPath, $"dnscrypt-proxy doğrulama denemesi {attempt}/6: henüz yanıt vermiyor, tekrar denenecek.\n");
+                await Task.Delay(1000);
+            }
+            AppendLogSafe(logPath, "UYARI: dnscrypt-proxy 127.0.0.1:53 üzerinde 6 denemede de yanıt vermedi.\n");
+            return false;
+        }
+
+        /// <summary>
+        /// Tüm adaptörlerde DnsCrypt-Proxy için IPv4: 127.0.0.1 ve IPv6: ::1 tanımlar, eski
+        /// native DoH kayıtlarını temizler. Düz metin 8.8.8.8 gibi yedekler EKLENMEZ -- iki
+        /// DNS yöntemi asla bir arada olmamalı (bkz. SetModernDNSSettingsAsync).
+        /// </summary>
+        private async Task<bool> SetDnscryptProxyDnsAsync(string logPath)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var psScript = @"
+$adapters = Get-NetAdapter | Where-Object {
+    $_.Status -eq 'Up' -and 
+    $_.InterfaceDescription -notlike '*Virtual*' -and 
+    $_.InterfaceDescription -notlike '*Hyper-V*' -and 
+    $_.InterfaceDescription -notlike '*WSL*' -and 
+    $_.Name -notlike '*vEthernet*' -and 
+    $_.InterfaceDescription -notlike '*TAP*' -and 
+    $_.InterfaceDescription -notlike '*TUN*' -and 
+    $_.InterfaceDescription -notlike '*VPN*'
+}
+foreach ($adapter in $adapters) {
+    try {
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses '127.0.0.1', '::1' -ErrorAction SilentlyContinue
+        netsh interface ip set dns ""$($adapter.Name)"" static 127.0.0.1 | Out-Null
+        netsh interface ipv6 set dns ""$($adapter.Name)"" static ::1 | Out-Null
+    } catch {}
+
+    # DnsCrypt-Proxy ile çakışmaması için eski DoH ayarlarını temizle
+    try {
+        $dohPath = 'HKLM:System\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters\' + $adapter.InterfaceGuid + '\DohInterfaceSettings'
+        if (Test-Path $dohPath) {
+            Remove-Item -Path $dohPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+Clear-DnsClientCache -ErrorAction SilentlyContinue
+ipconfig /flushdns
+";
+                    var exitCode = ExecutePowerShellScript(psScript);
+                    AppendLogSafe(logPath, $"DnsCrypt-Proxy için DNS 127.0.0.1 (IPv4) + ::1 (IPv6) olarak ayarlandı (PowerShell exit code: {exitCode}).\n");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    AppendLogSafe(logPath, $"SetDnscryptProxyDnsAsync hatası: {ex.Message}\n");
+                    return false;
+                }
+            });
+        }
+
+        private async Task<bool> SetDnscryptProxyDnsForZapret2Async(string logPath)
+        {
+            return await SetDnscryptProxyDnsAsync(logPath);
+        }
+
+        #endregion
+
         private async Task<bool> ResetModernDNSSettingsAsync()
         {
             var standardLogPath = GetStandardSetupLogPath();
@@ -6544,13 +7301,15 @@ foreach ($adapter in $adapters) {
     
     Write-Host ""Processing adapter: $adapterName""
     
-    # IPv4 DNS ayarlarını otomatik yap
+    # IPv4 ve IPv6 DNS ayarlarını otomatik yap
     try {
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses
-        Write-Host ""IPv4 DNS settings reset to automatic: $adapterName""
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+        netsh interface ip set dns ""$adapterName"" dhcp
+        netsh interface ipv6 set dns ""$adapterName"" dhcp
+        Write-Host ""IPv4 and IPv6 DNS settings reset to automatic: $adapterName""
     }
     catch {
-        Write-Host ""Failed to reset IPv4 DNS settings: $adapterName - $($_.Exception.Message)""
+        Write-Host ""Failed to reset DNS settings: $adapterName - $($_.Exception.Message)""
     }
     
     # DoH ayarlarını temizle
@@ -6584,10 +7343,33 @@ catch {
 
 # DNS önbelleğini temizle
 Clear-DnsClientCache
+ipconfig /flushdns
 Write-Host ""DNS settings reset completed""
 ";
 
                         var result = ExecutePowerShellScript(psScript);
+
+                        // Netsh ile de fiziksel adaptörleri ek olarak garanti altına al
+                        try
+                        {
+                            var interfacesOutput = ExecuteCommandString("netsh", "interface show interface");
+                            var lines = interfacesOutput.Split('\n');
+                            foreach (var line in lines)
+                            {
+                                if (line.Contains("Ethernet") || line.Contains("Wi-Fi"))
+                                {
+                                    var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                                    if (parts.Length >= 4)
+                                    {
+                                        var interfaceName = parts[3].Trim();
+                                        ExecuteCommand("netsh", $"interface ip set dns \"{interfaceName}\" dhcp");
+                                        ExecuteCommand("netsh", $"interface ipv6 set dns \"{interfaceName}\" dhcp");
+                                    }
+                                }
+                            }
+                            ExecuteCommand("ipconfig", "/flushdns");
+                        }
+                        catch { }
                         
                         if (result == 0)
                         {
@@ -6710,7 +7492,7 @@ Write-Host ""DNS settings reset completed""
             }
         }
 
-                private bool VerifyDNSSettings()
+        private bool VerifyDNSSettings(bool expectDoH = false)
         {
             try
             {
@@ -6787,14 +7569,13 @@ $dohResults | ConvertTo-Json
                 Debug.WriteLine($"DoH ayarları kontrolü:\n{dohOutput}");
                 File.AppendAllText(logPath, $"DoH Ayarları Kontrolü:\n{dohOutput}\n");
 
-                // Kontrol sonuçları - Sadece DoH ayarlarını kontrol et
+                // Kontrol sonuçları - DoH ayarlarını kontrol et
                 bool hasDoHSettings = dohOutput.Contains("DoHSettings") && !dohOutput.Contains("0");
 
-                Debug.WriteLine($"DoH Ayarları: {hasDoHSettings}");
-                File.AppendAllText(logPath, $"Doğrulama Sonuçları: DoH Ayarları={hasDoHSettings}\n");
+                Debug.WriteLine($"DoH Ayarları: {hasDoHSettings} (Beklenen: {expectDoH})");
+                File.AppendAllText(logPath, $"Doğrulama Sonuçları: DoH Ayarları={hasDoHSettings}, Beklenen={expectDoH}\n");
 
-                // DNS ayarları zaten başarıyla otomatik yapıldı, sadece DoH kontrolü yeterli
-                return !hasDoHSettings; // DoH ayarları yoksa başarılı
+                return expectDoH ? hasDoHSettings : !hasDoHSettings;
             }
             catch (Exception ex)
             {
@@ -7175,7 +7956,51 @@ $dohResults | ConvertTo-Json
         /// <summary>
         /// Tüm kurulum işlemleri öncesi temizlik yapar
         /// </summary>
-        private async Task<bool> PerformPreSetupCleanupAsync()
+        // ORTAK WireSock TAM KALDIRMA yardımcı fonksiyonu (kullanıcı bildirimi üzerine eklendi:
+        // WireSock Standart Kurulum aktifken ByeDPI/başka bir motorun "temiz kurulum"u
+        // çalıştırıldığında WireSock kaldırılmıyordu). Kök neden İKİ KATMANLI:
+        // (1) her motorun kendi "temiz kurulum" servis listesi sadece ESKİ "wiresock-client-
+        // service" adını biliyordu -- WireSock Secure Connect 3.x'in GERÇEK servisleri olan
+        // "WireSockAppService"/"WireSockConnectService" hiç durdurulup silinmiyordu.
+        // (2) kullanıcı "WireSock yineleyici"yi (Görev Zamanlayıcı'daki "WireSockRefresh" görevi,
+        // her 3 dakikada bir wiresock_refresh.bat çalıştırıp servisi sc query ile bulup yeniden
+        // başlatıyor -- bkz. res\wiresock_refresh.bat) aktifleştirmişse, biz servisi durdursak
+        // bile SİLMEDEN bıraktığımız her an bu görev onu birkaç dakika içinde tekrar
+        // başlatabiliyordu (servis SCM kaydı silinmediği sürece "sc query" onu hâlâ bulur).
+        // Bu fonksiyon İKİSİNİ de (üç olası servis adı + WireSockRefresh görevi) TEK seferde,
+        // doğru sırada (önce görev, sonra servisler) temizler; tüm motorların "temiz kurulum"
+        // akışları artık bunu çağırıyor.
+        private void RemoveWireSockCompletely(string logPath)
+        {
+            try
+            {
+                // _wireSockService.RemoveServiceAsync() zaten HER İKİ servis adını da
+                // (WireSockAppService/WireSockConnectService modern + wiresock-client-service
+                // eski) durdurup siliyor, modern tünel bağlantısını/profili temizliyor VE
+                // WireSockRefresh (yineleyici) görevini kaldırıyor -- WireSock'un kendi
+                // "Kaldır" butonunun (BtnWireSockRemove_Click) kullandığı, zaten kanıtlanmış
+                // tam temizleme mantığı. Motor "temiz kurulum" akışları bunu tekrar yazmak
+                // yerine doğrudan bunu çağırıyor.
+                var removed = _wireSockService.RemoveServiceAsync().GetAwaiter().GetResult();
+                File.AppendAllText(logPath, $"WireSock tam kaldırma sonucu: {removed}\n");
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(logPath, $"WireSock kaldırma hatası: {ex.Message}\n");
+            }
+        }
+
+        // ÖNEMLİ (kullanıcının canlı testiyle bulunan regresyon): "alsoRemoveWireSock" parametresi
+        // eklendi çünkü PerformPreSetupCleanupAsync HEM diğer motorların (ByeDPI/Zapret/Zapret2/
+        // GoodbyeDPI) HEM DE WireSock'un KENDİ Standart/Alternatif/Özel Kurulum akışlarının ilk
+        // adımı olarak çağrılıyor. RemoveWireSockCompletely'yi buraya EKLEDİĞİMİZDE (ByeDPI temiz
+        // kurulumda WireSock kalıyor sorununu çözmek için) bu, WireSock'un KENDİ kurulum akışının
+        // da önce kendi servislerini (WireSockAppService/WireSockConnectService) SİLMESİNE yol
+        // açtı -- ama IsLatestWireSockInstalled() sadece dosya varlığına baktığından (servis
+        // kaydına değil), kod "zaten kurulu" sanıp DownloadAndInstallWireSock()'u ATLIYOR ve
+        // silinen servisler bir daha hiç oluşturulmuyordu ("WireSock hizmeti kurulmuyor" şikayeti).
+        // Artık WireSock'un kendi kurulum akışları bu parametreyi false geçiyor.
+        private async Task<bool> PerformPreSetupCleanupAsync(bool alsoRemoveWireSock = true)
         {
             return await Task.Run(() =>
             {
@@ -7183,7 +8008,7 @@ $dohResults | ConvertTo-Json
                 {
                     var logPath = GetLogPath();
                     File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik başlatılıyor...\n");
-                    
+
                     // 1. Discord.exe'yi durdur
                     File.AppendAllText(logPath, "1. Discord.exe durduruluyor...\n");
                     var discordProcesses = Process.GetProcessesByName("Discord");
@@ -7211,16 +8036,34 @@ $dohResults | ConvertTo-Json
                     // Kısa bir bekleme süresi ekle
                     Thread.Sleep(2000);
 
+                    // 1.5. WireSock'u TAM olarak kaldır (tünel + WireSockRefresh yineleyici görevi +
+                    // hem modern hem eski servis adları -- bkz. RemoveWireSockCompletely).
+                    // SADECE WireSock'u kuran akış DEĞİLSE çalışır (yukarıdaki not).
+                    if (alsoRemoveWireSock)
+                    {
+                        File.AppendAllText(logPath, "1.5. WireSock tamamen kaldırılıyor...\n");
+                        RemoveWireSockCompletely(logPath);
+                    }
+                    else
+                    {
+                        File.AppendAllText(logPath, "1.5. WireSock kaldırma adımı atlandı (bu akış WireSock'un kendisini kuruyor).\n");
+                    }
+
                                 // 2. Hizmetleri sırayla durdur ve kaldır
-            var services = new[] { 
-                "GoodbyeDPI", 
-                "zapret", 
-                "byedpi", 
-                "winws1", 
-                "winws2", 
-                "wiresock-client-service", 
-                "ProxiFyreService", 
-                "WinDivert" 
+            // NOT: dnscrypt-proxy KASITLI olarak bu listede yok -- sistem geneli DNS sunucusu
+            // olarak surekli calismasi gerekiyor, her kurulumda kaldirilmamali.
+            // NOT: wiresock-client-service/WireSockAppService/WireSockConnectService artık burada
+            // YOK -- yukarıdaki RemoveWireSockCompletely çağrısı bunları (WireSockRefresh yineleyici
+            // görevi dahil) zaten tam olarak hallediyor.
+            var services = new[] {
+                "GoodbyeDPI",
+                "zapret",
+                "zapret2",
+                "byedpi",
+                "winws1",
+                "winws2",
+                "ProxiFyreService",
+                "WinDivert"
             };
             
             File.AppendAllText(logPath, "2. Hizmetler durduruluyor ve kaldırılıyor...\n");
@@ -7249,6 +8092,35 @@ $dohResults | ConvertTo-Json
                 {
                     File.AppendAllText(logPath, $"{service} işlenirken hata: {ex.Message}\n");
                 }
+            }
+
+            // 2b. WinDivert TEK ve PAYLAŞILAN bir kernel sürücüsü (Zapret/Zapret2/GoodbyeDPI
+            // hepsi aynı sürücüyü kullanıyor, canlı testte doğrulandı) -- yukarıdaki döngüde
+            // "durdur+kaldır" komutları gönderilmiş olsa bile GERÇEKTEN durduğu garanti değil
+            // (STOP_PENDING'de asılı kalabilir). Yeni kuruluma geçmeden önce bunu doğruluyoruz,
+            // körlemesine sabit gecikmeye güvenmek yerine.
+            File.AppendAllText(logPath, "2b. WinDivert sürücüsünün gerçekten durduğu doğrulanıyor...\n");
+            try
+            {
+                var windivertDeadline = DateTime.Now.AddSeconds(10);
+                bool windivertConfirmedStopped = false;
+                while (DateTime.Now < windivertDeadline)
+                {
+                    var queryResult = RunCommandAsync("sc", "query WinDivert").GetAwaiter().GetResult();
+                    if (queryResult.Contains("1060") || queryResult.Contains("STOPPED"))
+                    {
+                        windivertConfirmedStopped = true;
+                        break;
+                    }
+                    Thread.Sleep(500);
+                }
+                File.AppendAllText(logPath, windivertConfirmedStopped
+                    ? "WinDivert durduruldu/kurulu değil, doğrulandı.\n"
+                    : "UYARI: WinDivert 10 saniye içinde durduğu doğrulanamadı -- başka bir uygulama hâlâ kullanıyor olabilir.\n");
+            }
+            catch (Exception ex)
+            {
+                File.AppendAllText(logPath, $"WinDivert doğrulama hatası: {ex.Message}\n");
             }
 
             // 3. Drover dosyalarını temizle
@@ -7359,8 +8231,15 @@ $dohResults | ConvertTo-Json
                 {
                     var logPath = GetLogPath();
                     File.AppendAllText(logPath, "ByeDPI DLL kurulumu için hizmetler kaldırılıyor...\n");
-                    
-                    var services = new[] { "GoodbyeDPI", "WinDivert", "ProxiFyre", "wiresock-client-service", "ByeDPI" };
+
+                    // WireSock'u TAM olarak kaldır (bkz. RemoveWireSockCompletely) -- sadece
+                    // "wiresock-client-service" adını denemek WireSock Secure Connect 3.x'i
+                    // (WireSockAppService/WireSockConnectService) ve WireSockRefresh yineleyici
+                    // görevini gözden kaçırıyordu.
+                    File.AppendAllText(logPath, "WireSock tamamen kaldırılıyor...\n");
+                    RemoveWireSockCompletely(logPath);
+
+                    var services = new[] { "GoodbyeDPI", "WinDivert", "ProxiFyre", "ByeDPI" };
                     
                     foreach (var service in services)
                     {
@@ -7926,21 +8805,21 @@ Get-DnsClientDohServerAddress
                 // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
                 if (AreCriticalWinDivertFilesMissing())
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kritik WinDivert dosyaları eksik olduğu için LocalAppData'ya kopyalama işlemi yapılmıyor.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kritik WinDivert dosyaları eksik olduğu için LocalAppData'ya kopyalama işlemi yapılmıyor.\n");
                     Debug.WriteLine("Kritik WinDivert dosyaları eksik - Zapret dosyaları LocalAppData'ya kopyalanmıyor");
                     return false;
                 }
                 
                 var localZapretPath = GetLocalAppDataZapretPath();
                 var sourceZapretPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "zapret");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret dosyaları kontrol ediliyor...\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kaynak klasör: {sourceZapretPath}\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hedef klasör: {localZapretPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret dosyaları kontrol ediliyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kaynak klasör: {sourceZapretPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hedef klasör: {localZapretPath}\n");
                 
                 // Kaynak klasör kontrolü
                 if (!Directory.Exists(sourceZapretPath))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Kaynak klasör bulunamadı!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Kaynak klasör bulunamadı!\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_source_folder_not_found").Replace("{0}", sourceZapretPath), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                     return false;
@@ -7949,27 +8828,41 @@ Get-DnsClientDohServerAddress
                 // Local klasörü her zaman yeniden oluştur (güncel dosyalar için)
                 if (Directory.Exists(localZapretPath))
                 {
-                    try
+                    // ÖNEMLİ: "zapret" hizmeti hâlâ çalışıyorsa winws.exe (Cygwin ikilisi)
+                    // zapret-winws\cygwin1.dll dosyasını kilitlemiş olur -- silmeden önce
+                    // hizmeti durdurup dosya kilidinin serbest kalmasını sağlıyoruz. AYRICA
+                    // WinDivert TEK ve PAYLAŞILAN bir kernel sürücüsü (bkz.
+                    // EnsureNoOtherWinDivertEngineIsActive) -- Zapret2 veya GoodbyeDPI aktifken
+                    // WinDivert'i durdurmaya çalışmak "STOP_PENDING" durumunda askıda kalabiliyor
+                    // (canlı testte doğrulandı). Bu yardımcı fonksiyon diğer tüm WinDivert
+                    // motorlarını durdurup WinDivert'in GERÇEKTEN durduğunu doğruluyor.
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kilidini önlemek için zapret hizmeti durduruluyor...\n");
+                    ExecuteCommand("sc", "stop zapret");
+                    await Task.Delay(1000);
+                    await EnsureNoOtherWinDivertEngineIsActive(zapretLogPath, "zapret");
+
+                    // Servisler DIŞINDA, blockcheck taramasının kendi başlattığı ham bash.exe/
+                    // winws.exe süreçleri (servis değil) önceki bir taramadan askıda kalmış
+                    // olabilir ve WorkingDirectory'leri tam olarak silinecek klasör olduğundan
+                    // Windows'un "being used by another process" hatasına yol açabilir -- bkz.
+                    // KillAllStrayEngineProcesses.
+                    KillAllStrayEngineProcesses(zapretLogPath, Path.Combine(localZapretPath, "zapret-winws", "killall.exe"));
+
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut local klasör siliniyor...\n");
+                    if (DeleteDirectoryWithRetry(localZapretPath, zapretLogPath))
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut local klasör siliniyor...\n");
-                        Directory.Delete(localZapretPath, true);
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör silindi.\n");
-            }
-            catch (Exception ex)
-            {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör silme hatası: {ex.Message}\n");
-                        System.Diagnostics.Debug.WriteLine($"Local klasör silme hatası: {ex.Message}");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör silindi.\n");
                     }
                 }
 
                 // Local klasörü oluştur
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör oluşturuluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör oluşturuluyor...\n");
                 Directory.CreateDirectory(localZapretPath);
 
                 // Dosyaları kopyala
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosyalar kopyalanıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosyalar kopyalanıyor...\n");
                 await Task.Run(() => CopyDirectory(sourceZapretPath, localZapretPath));
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama tamamlandı.\n");
                 
                 // Zapret Otomatik Kurulum için özel dosyaları kopyala
                 var sourceHiddenCmdPath = Path.Combine(sourceZapretPath, "blockcheck", "blockcheck-hidden.cmd");
@@ -7983,16 +8876,16 @@ Get-DnsClientDohServerAddress
             try
             {
                         File.Copy(sourceHiddenCmdPath, destHiddenCmdPath, true);
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalandı.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalandı.\n");
             }
             catch (Exception ex)
             {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalama hatası: {ex.Message}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalama hatası: {ex.Message}\n");
             }
         }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blockcheck-hidden.cmd kaynak dosyası bulunamadı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blockcheck-hidden.cmd kaynak dosyası bulunamadı.\n");
         }
 
                 // blog-hidden.sh kopyala
@@ -8001,29 +8894,29 @@ Get-DnsClientDohServerAddress
             try
             {
                         File.Copy(sourceHiddenShPath, destHiddenShPath, true);
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalandı.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalandı.\n");
             }
             catch (Exception ex)
             {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalama hatası: {ex.Message}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalama hatası: {ex.Message}\n");
                     }
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blog-hidden.sh kaynak dosyası bulunamadı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blog-hidden.sh kaynak dosyası bulunamadı.\n");
                 }
                 
                 // Kopyalama sonrası kontrol
                 if (!Directory.Exists(localZapretPath))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Local klasör oluşturulamadı!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Local klasör oluşturulamadı!\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_files_copy_failed"), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                     return false;
                 }
 
                 // Önemli dosyaların varlığını kontrol et
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Gerekli dosyalar kontrol ediliyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Gerekli dosyalar kontrol ediliyor...\n");
                 var requiredFiles = new[]
                 {
                     Path.Combine(localZapretPath, "blockcheck", "blockcheck.cmd"),
@@ -8033,14 +8926,14 @@ Get-DnsClientDohServerAddress
                 {
                     if (!File.Exists(file))
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Gerekli dosya bulunamadı: {file}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Gerekli dosya bulunamadı: {file}\n");
                         System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "required_file_not_found").Replace("{0}", file), 
                             LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                         return false;
                     }
                     else
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya bulundu: {Path.GetFileName(file)}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya bulundu: {Path.GetFileName(file)}\n");
                     }
                 }
 
@@ -8148,6 +9041,139 @@ Get-DnsClientDohServerAddress
             
             // Merkezi boyut hesaplama ve güncelleme
             UpdateZapretWindowSize();
+        }
+
+        // Zapret dışlama listesi (hostlist-exclude) dosya yolları. Aktif dosya, winws.exe'nin
+        // --hostlist-exclude= ile canlı okuduğu dosyadır (her zaman var, "Kullan" kapalıyken
+        // boşaltılır). Yedek dosya, "Kullan" kapatıldığında asıl listeyi kaybetmemek için
+        // her zaman gerçek içeriği tutar.
+        private string GetZapretHostlistPath()
+        {
+            var localZapretPath = GetLocalAppDataZapretPath();
+            return Path.Combine(localZapretPath, "zapret-winws", "splitwire-exclude.txt");
+        }
+
+        private string GetZapretHostlistBackupPath()
+        {
+            var localZapretPath = GetLocalAppDataZapretPath();
+            return Path.Combine(localZapretPath, "zapret-winws", "splitwire-exclude.backup.txt");
+        }
+
+        private void LoadZapretHostlist()
+        {
+            try
+            {
+                var backupPath = GetZapretHostlistBackupPath();
+                txtZapretHostlist.Text = File.Exists(backupPath) ? File.ReadAllText(backupPath) : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"LoadZapretHostlist hatası: {ex.Message}");
+            }
+        }
+
+        private void ChkZapretUseHostlist_Checked(object sender, RoutedEventArgs e)
+        {
+            if (editHostlistPanelZapret != null)
+                editHostlistPanelZapret.Visibility = Visibility.Visible;
+            _zapretUseHostlistActive = true;
+
+            // XAML IsChecked="True" başlangıçta bu olayı Window henüz tam yüklenmeden
+            // tetikleyebilir -- o an dosya işlemi gerekmiyor (dosyalar zaten res/ kaynağından
+            // aynı içerikle geldi).
+            if (!IsLoaded) return;
+
+            try
+            {
+                var hostlistPath = GetZapretHostlistPath();
+                var backupPath = GetZapretHostlistBackupPath();
+                if (File.Exists(backupPath))
+                {
+                    File.Copy(backupPath, hostlistPath, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ChkZapretUseHostlist_Checked hatası: {ex.Message}");
+            }
+
+            UpdateZapretWindowSize();
+        }
+
+        private void ChkZapretUseHostlist_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (editHostlistPanelZapret != null)
+                editHostlistPanelZapret.Visibility = Visibility.Collapsed;
+            chkZapretEditHostlist.IsChecked = false;
+            txtZapretHostlist.Visibility = Visibility.Collapsed;
+            btnZapretSaveHostlist.Visibility = Visibility.Collapsed;
+            _zapretUseHostlistActive = false;
+            _zapretEditHostlistActive = false;
+
+            if (!IsLoaded)
+            {
+                UpdateZapretWindowSize();
+                return;
+            }
+
+            try
+            {
+                var hostlistPath = GetZapretHostlistPath();
+                var backupPath = GetZapretHostlistBackupPath();
+                // Asıl listeyi kaybetmemek için önce yedeğe al (elle yapılmış son bir
+                // değişiklik varsa da korunmuş olur), sonra aktif dosyayı boşalt.
+                if (File.Exists(hostlistPath))
+                {
+                    File.Copy(hostlistPath, backupPath, true);
+                }
+                File.WriteAllText(hostlistPath, string.Empty);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ChkZapretUseHostlist_Unchecked hatası: {ex.Message}");
+            }
+
+            UpdateZapretWindowSize();
+        }
+
+        private void ChkZapretEditHostlist_Checked(object sender, RoutedEventArgs e)
+        {
+            txtZapretHostlist.Visibility = Visibility.Visible;
+            btnZapretSaveHostlist.Visibility = Visibility.Visible;
+            LoadZapretHostlist();
+            _zapretEditHostlistActive = true;
+            UpdateZapretWindowSize();
+        }
+
+        private void ChkZapretEditHostlist_Unchecked(object sender, RoutedEventArgs e)
+        {
+            txtZapretHostlist.Visibility = Visibility.Collapsed;
+            btnZapretSaveHostlist.Visibility = Visibility.Collapsed;
+            _zapretEditHostlistActive = false;
+            UpdateZapretWindowSize();
+        }
+
+        private void BtnZapretSaveHostlist_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var content = txtZapretHostlist.Text ?? string.Empty;
+                var hostlistPath = GetZapretHostlistPath();
+                var backupPath = GetZapretHostlistBackupPath();
+
+                // Hem aktif hem yedek dosyaya yaz -- winws.exe değişikliği otomatik algılayıp
+                // yeniden yükler (yeniden başlatmaya gerek yok), yedek de her zaman güncel kalır.
+                File.WriteAllText(hostlistPath, content);
+                File.WriteAllText(backupPath, content);
+
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_hostlist_saved"),
+                    LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_hostlist_save_error").Replace("{0}", ex.Message),
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void ChkAdvancedSettings_Checked(object sender, RoutedEventArgs e)
@@ -8932,6 +9958,27 @@ Get-DnsClientDohServerAddress
             paragraph.Inlines.Add(new LineBreak());
             paragraph.Inlines.Add(new LineBreak());
 
+            // Dışlama Listesi
+            var useHostlistTitle = new Run(LanguageManager.GetText("zapret_help", "use_hostlist_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var useHostlistText = new Run(LanguageManager.GetText("zapret_help", "use_hostlist_text"));
+            paragraph.Inlines.Add(useHostlistTitle);
+            paragraph.Inlines.Add(useHostlistText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            var editHostlistTitle = new Run(LanguageManager.GetText("zapret_help", "edit_hostlist_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var editHostlistText = new Run(LanguageManager.GetText("zapret_help", "edit_hostlist_text"));
+            paragraph.Inlines.Add(editHostlistTitle);
+            paragraph.Inlines.Add(editHostlistText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
             // Önayarlı Hizmet Kur
             var serviceTitle = new Run(LanguageManager.GetText("zapret_help", "service_title"))
             {
@@ -9119,6 +10166,17 @@ Get-DnsClientDohServerAddress
             paragraph.Inlines.Add(new LineBreak());
             paragraph.Inlines.Add(new LineBreak());
 
+            // dnscrypt-proxy ek katman
+            var dnscryptTitle = new Run(LanguageManager.GetText("advanced_help", "dnscrypt_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var dnscryptText = new Run(LanguageManager.GetText("advanced_help", "dnscrypt_text"));
+            paragraph.Inlines.Add(dnscryptTitle);
+            paragraph.Inlines.Add(dnscryptText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
             // Tüm Hizmetleri Kaldır
             var removeAllTitle = new Run(LanguageManager.GetText("advanced_help", "remove_all_title"))
             {
@@ -9225,7 +10283,7 @@ Get-DnsClientDohServerAddress
                 try
                 {
                     var zapretLogPath = GetZapretLogPath();
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret otomatik kurulum başlatılıyor...\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret otomatik kurulum başlatılıyor...\n");
                     
                     // Önce hizmetleri durdur ve kaldır
                     await PerformServiceCleanupForZapret();
@@ -9270,26 +10328,26 @@ Get-DnsClientDohServerAddress
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret için hizmet temizliği başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret için hizmet temizliği başlatılıyor...\n");
 
                 // Kurulum öncesi temizlik (Discord + tüm hizmetler)
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik yapılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik yapılıyor...\n");
                 var cleanupSuccess = await PerformPreSetupCleanupAsync();
                 if (cleanupSuccess)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik başarıyla tamamlandı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik başarıyla tamamlandı.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kurulum öncesi temizlik sırasında hata oluştu.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kurulum öncesi temizlik sırasında hata oluştu.\n");
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği tamamlandı.\n");
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği hatası: {ex.Message}\n");
                 throw new Exception($"Hizmet temizliği başarısız: {ex.Message}", ex);
             }
         }
@@ -9299,31 +10357,31 @@ Get-DnsClientDohServerAddress
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başlatılıyor...\n");
 
                 // DNS ayarları (sadece switch aktifse)
                 var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
                 if (enableAutoDNS)
                 {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
                 await SetModernDNSSettingsAsync();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
                 }
 
                 // Zapret kurulumunu gerçekleştir
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulumu başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulumu başlatılıyor...\n");
                 await RunZapretInstallation();
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başarıyla tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başarıyla tamamlandı.\n");
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci hatası: {ex.Message}\n");
                 throw new Exception($"Zapret kurulum süreci başarısız: {ex.Message}", ex);
             }
         }
@@ -9361,22 +10419,22 @@ Get-DnsClientDohServerAddress
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başlatılıyor...\n");
                 
                 var localZapretPath = GetLocalAppDataZapretPath();
                 var blockcheckShPath = Path.Combine(localZapretPath, "blockcheck", "zapret", "blockcheck.sh");
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local Zapret yolu: {localZapretPath}\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.sh yolu: {blockcheckShPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local Zapret yolu: {localZapretPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.sh yolu: {blockcheckShPath}\n");
                 
                 // SCANLEVEL ayarını güncelle
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncelleniyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncelleniyor...\n");
                 await UpdateScanLevel(blockcheckShPath);
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncellendi.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncellendi.\n");
                 
                 // Zapret Otomatik Kurulum için özel blockcheck-hidden.cmd dosyasını kullan
                 var blockcheckCmdPath = Path.Combine(localZapretPath, "blockcheck", "blockcheck-hidden.cmd");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck-hidden.cmd çalıştırılıyor: {blockcheckCmdPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck-hidden.cmd çalıştırılıyor: {blockcheckCmdPath}\n");
                 
                 // Blockcheck process'ini çalıştır ve bash.exe'nin kapanmasını bekle
                 await Task.Run(async () =>
@@ -9395,12 +10453,12 @@ Get-DnsClientDohServerAddress
                         RedirectStandardInput = true
                     };
                     
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatılıyor...\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatılıyor...\n");
                     
                     using var process = Process.Start(psi);
                     if (process != null)
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatıldı. PID: {process.Id}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatıldı. PID: {process.Id}\n");
                         
                         // Process ID'yi al
                         var processId = process.Id;
@@ -9409,17 +10467,26 @@ Get-DnsClientDohServerAddress
                 var cancellationTokenSource = new CancellationTokenSource();
                 var hideProcessTask = Task.Run(() => ContinuouslyHideZapretProcesses(cancellationTokenSource.Token, zapretLogPath));
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i başlatıldı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i başlatıldı.\n");
                         
-                        // Ana process'in kapanmasını bekle
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ana process kapanması bekleniyor...\n");
-                        process.WaitForExit();
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ana process kapandı. Exit Code: {process.ExitCode}\n");
+                        // Ana process'in kapanmasını bekle -- SÜRESİZ DEĞİL, bkz. RunZapret2Installation'daki
+                        // aynı düzeltme (parametresiz WaitForExit() bir ağ çağrısı askıda kalırsa
+                        // uygulamayı sonsuza dek bloke edebiliyordu).
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ana process kapanması bekleniyor (maks. 20 dakika)...\n");
+                        var mainProcessExited = process.WaitForExit((int)TimeSpan.FromMinutes(20).TotalMilliseconds);
+                        if (!mainProcessExited)
+                        {
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Blockcheck 20 dakika içinde tamamlanamadı (zaman aşımı). Process sonlandırılıyor.\n");
+                            GracefullyThenForceKillProcessTree(process.Id, zapretLogPath, "Zaman aşımı", Path.Combine(localZapretPath, "zapret-winws", "killall.exe"));
+                            cancellationTokenSource.Cancel();
+                            throw new Exception("Blockcheck islemi zaman asimina ugradi (20 dakika) - islem sonlandirildi. Lutfen taramayi 'Hizli' seviyesiyle tekrar deneyin.");
+                        }
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ana process kapandı. Exit Code: {process.ExitCode}\n");
                         
                         // Bash.exe process'lerini bul ve kapanmasını bekle
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process'leri aranıyor...\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process'leri aranıyor...\n");
                         var bashProcesses = Process.GetProcessesByName("bash");
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {bashProcesses.Length} adet bash process bulundu.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {bashProcesses.Length} adet bash process bulundu.\n");
                         
                         foreach (var bashProcess in bashProcesses)
                         {
@@ -9428,19 +10495,19 @@ Get-DnsClientDohServerAddress
                                 // Sadece bizim process'ten sonra başlayan bash process'lerini bekle
                                 if (bashProcess.StartTime > process.StartTime)
                                 {
-                                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process bekleniyor. PID: {bashProcess.Id}\n");
+                                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process bekleniyor. PID: {bashProcess.Id}\n");
                                     bashProcess.WaitForExit();
-                                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process kapandı. PID: {bashProcess.Id}\n");
+                                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process kapandı. PID: {bashProcess.Id}\n");
                                 }
                             }
                             catch (Exception ex)
                             {
-                                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process bekleme hatası: {ex.Message}\n");
+                                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Bash process bekleme hatası: {ex.Message}\n");
                             }
                         }
                         
                         // Ek olarak, blockcheck.log dosyasının oluşmasını bekle
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.log dosyası bekleniyor...\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.log dosyası bekleniyor...\n");
                         var logPath = Path.Combine(localZapretPath, "blockcheck", "blockcheck.log");
                         var maxWaitTime = TimeSpan.FromMinutes(30); // Maksimum 30 dakika bekle
                         var startTime = DateTime.Now;
@@ -9453,11 +10520,11 @@ Get-DnsClientDohServerAddress
                         if (!File.Exists(logPath))
                         {
                             var errorMsg = "blockcheck.log dosyası oluşturulamadı (30 dakika timeout)";
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
                             throw new Exception(errorMsg);
                         }
                         
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.log dosyası bulundu: {logPath}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck.log dosyası bulundu: {logPath}\n");
                         
                         // Process gizleme task'ini durdur
                         cancellationTokenSource.Cancel();
@@ -9469,21 +10536,21 @@ Get-DnsClientDohServerAddress
                         {
                             // Normal cancellation - beklenen durum
                         }
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i durduruldu.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i durduruldu.\n");
                     }
                 });
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck tamamlandı. Sonuçlar işleniyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck tamamlandı. Sonuçlar işleniyor...\n");
                 
                 // Log dosyasını işle ve service_create.cmd'yi güncelle
                 await ProcessBlockcheckResults();
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başarıyla tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kurulum süreci başarıyla tamamlandı.\n");
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
                 throw new Exception($"Zapret kurulum süreci başarısız: {ex.Message}", ex);
             }
         }
@@ -9495,7 +10562,7 @@ Get-DnsClientDohServerAddress
                 var zapretLogPath = GetZapretLogPath();
                 var scanLevel = GetSelectedScanLevel();
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleniyor: {scanLevel}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleniyor: {scanLevel}\n");
                 
                 var content = await File.ReadAllTextAsync(blockcheckShPath);
                 
@@ -9505,12 +10572,12 @@ Get-DnsClientDohServerAddress
                 
                 await File.WriteAllTextAsync(blockcheckShPath, content);
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL başarıyla güncellendi: {scanLevel}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL başarıyla güncellendi: {scanLevel}\n");
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleme hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleme hatası: {ex.Message}\n");
                 throw new Exception($"SCANLEVEL güncelleme hatası: {ex.Message}", ex);
             }
         }
@@ -9531,34 +10598,34 @@ Get-DnsClientDohServerAddress
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları işleniyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları işleniyor...\n");
                 
                 var localZapretPath = GetLocalAppDataZapretPath();
                 var logPath = Path.Combine(localZapretPath, "blockcheck", "blockcheck.log");
                 var serviceCreatePath = Path.Combine(localZapretPath, "zapret-winws", "service_create.cmd");
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası yolu: {logPath}\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create yolu: {serviceCreatePath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası yolu: {logPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create yolu: {serviceCreatePath}\n");
                 
                 if (!File.Exists(logPath))
                 {
                     var errorMsg = "blockcheck.log dosyası bulunamadı.";
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
                     throw new Exception(errorMsg);
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası okunuyor...\n");
-                var logContent = await File.ReadAllTextAsync(logPath);
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası okunuyor...\n");
+                var logContent = await ReadBlockcheckLogWithRetryAsync(logPath);
                 var summaryIndex = logContent.IndexOf("* SUMMARY");
                 
                 if (summaryIndex == -1)
                 {
                     var errorMsg = "Log dosyasında SUMMARY bölümü bulunamadı.";
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
                     throw new Exception(errorMsg);
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SUMMARY bölümü bulundu. Parametreler aranıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SUMMARY bölümü bulundu. Parametreler aranıyor...\n");
                 var lines = logContent.Substring(summaryIndex).Split('\n');
                 string parameters = null;
                 
@@ -9570,7 +10637,7 @@ Get-DnsClientDohServerAddress
                         if (tcpIndex >= 0)
                         {
                             parameters = line.Substring(tcpIndex + "--wf-tcp=443".Length).Trim();
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parametreler bulundu: {parameters}\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parametreler bulundu: {parameters}\n");
                                         break;
                                     }
                                 }
@@ -9579,27 +10646,27 @@ Get-DnsClientDohServerAddress
                 if (string.IsNullOrEmpty(parameters))
                 {
                     var errorMsg = "Log dosyasında gerekli parametreler bulunamadı.";
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
                     throw new Exception(errorMsg);
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create.cmd güncelleniyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create.cmd güncelleniyor...\n");
                 
                 // Yeni hizmet kurulum yöntemi: service_install_splitwireturkey.cmd
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Yeni hizmet kurulum yöntemi kullanılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Yeni hizmet kurulum yöntemi kullanılıyor...\n");
                 
                 // Parametreleri birleştir: temel parametreler + blockcheck'den gelen parametreler
                 var fullParameters = $"--wf-tcp=80,443 --wf-udp=443,50000,50100 {parameters}";
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Birleştirilmiş parametreler: {fullParameters}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Birleştirilmiş parametreler: {fullParameters}\n");
                 
                 // Yeni hizmet kurulum dosyasını oluştur
                 var serviceInstallPath = Path.Combine(localZapretPath, "zapret-winws", "service_install_splitwireturkey.cmd");
                 await CreateServiceInstallScript(serviceInstallPath, fullParameters);
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuldu: {serviceInstallPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuldu: {serviceInstallPath}\n");
                 
                 // Hizmet kurulum scriptini çalıştır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti çalıştırılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti çalıştırılıyor...\n");
                 
                 await Task.Run(() =>
                 {
@@ -9617,7 +10684,7 @@ Get-DnsClientDohServerAddress
                     using var process = Process.Start(psi);
                     if (process != null)
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process başlatıldı. PID: {process.Id}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process başlatıldı. PID: {process.Id}\n");
                         
                         // Çıktıları oku
                         var output = process.StandardOutput.ReadToEnd();
@@ -9625,22 +10692,22 @@ Get-DnsClientDohServerAddress
                         
                         process.WaitForExit();
                         
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process kapandı. Exit Code: {process.ExitCode}\n");
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Output: {output}\n");
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Error: {error}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process kapandı. Exit Code: {process.ExitCode}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Output: {output}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Error: {error}\n");
                     }
                 });
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla çalıştırıldı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla çalıştırıldı.\n");
                 
                 // Hizmet kurulumunu doğrula
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulumu doğrulanıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulumu doğrulanıyor...\n");
                 var serviceExists = await VerifyZapretService();
                 
                 if (serviceExists)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla kuruldu ve çalışıyor.\n");
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları başarıyla işlendi.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla kuruldu ve çalışıyor.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları başarıyla işlendi.\n");
 
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_install_success"), 
                         LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
@@ -9650,8 +10717,8 @@ Get-DnsClientDohServerAddress
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Zapret hizmeti kurulamadı veya çalışmıyor.\n");
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları işlendi ancak hizmet kurulumu başarısız.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Zapret hizmeti kurulamadı veya çalışmıyor.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck sonuçları işlendi ancak hizmet kurulumu başarısız.\n");
 
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_install_partial_success"), 
                         LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -9660,7 +10727,7 @@ Get-DnsClientDohServerAddress
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
                 throw new Exception($"Blockcheck sonuçları işlenirken hata oluştu: {ex.Message}", ex);
             }
         }
@@ -9670,7 +10737,7 @@ Get-DnsClientDohServerAddress
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuluyor...\n");
                 
                 var scriptContent = $@"@echo off
 setlocal enabledelayedexpansion
@@ -9681,7 +10748,10 @@ rem Bu script SplitWireTurkey tarafından otomatik olarak oluşturulur
 set SERVICE_NAME=zapret
 set EXE_PATH=%~dp0winws.exe
 set DISPLAY_NAME=Zapret
-set ARGS={parameters}
+rem --hostlist-exclude: kullanicinin dislama listesi ile duzenledigi dosya. Dosya her zaman
+rem var (Kullan switch'i kapaliyken icerigi bosaltilir) -- winws.exe degisikligi otomatik
+rem algilayip yeniden yukler, yeniden baslatmaya gerek yok. Argumanlarin SONUNA eklenir.
+set ARGS={parameters} --hostlist-exclude=%~dp0splitwire-exclude.txt
 
 rem Mevcut hizmeti durdur ve sil
 echo Mevcut %SERVICE_NAME% hizmeti kontrol ediliyor...
@@ -9727,13 +10797,13 @@ echo Hizmet kurulum işlemi tamamlandı.
                 
                 await File.WriteAllTextAsync(scriptPath, scriptContent);
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla oluşturuldu.\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Script içeriği:\n{scriptContent}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla oluşturuldu.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Script içeriği:\n{scriptContent}\n");
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturma hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturma hatası: {ex.Message}\n");
                 throw new Exception($"Hizmet kurulum scripti oluşturma hatası: {ex.Message}", ex);
             }
         }
@@ -9743,7 +10813,7 @@ echo Hizmet kurulum işlemi tamamlandı.
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti kontrol ediliyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti kontrol ediliyor...\n");
                 
                 // sc query komutu ile hizmet durumunu kontrol et
                 var result = await Task.Run(() =>
@@ -9770,30 +10840,30 @@ echo Hizmet kurulum işlemi tamamlandı.
                     return new { Output = "", Error = "", ExitCode = -1 };
                 });
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query sonucu - Exit Code: {result.ExitCode}\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query çıktısı: {result.Output}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query sonucu - Exit Code: {result.ExitCode}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query çıktısı: {result.Output}\n");
                 if (!string.IsNullOrEmpty(result.Error))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query hatası: {result.Error}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query hatası: {result.Error}\n");
                 }
                 
                 // Hizmet bulundu mu kontrol et
                 if (result.ExitCode == 0 && result.Output.Contains("SERVICE_NAME: zapret"))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulundu.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulundu.\n");
                     
                     // Hizmet durumunu kontrol et
                     if (result.Output.Contains("RUNNING") || result.Output.Contains("ÇALIŞIYOR"))
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti çalışıyor.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti çalışıyor.\n");
                         return true;
                     }
                     else
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulundu ancak çalışmıyor.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulundu ancak çalışmıyor.\n");
                         
                         // Hizmeti başlatmayı dene
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatılmaya çalışılıyor...\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatılmaya çalışılıyor...\n");
                         var startResult = await Task.Run(() =>
                         {
                             var psi = new ProcessStartInfo
@@ -9818,31 +10888,31 @@ echo Hizmet kurulum işlemi tamamlandı.
                             return new { Output = "", Error = "", ExitCode = -1 };
                         });
                         
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma sonucu - Exit Code: {startResult.ExitCode}\n");
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma çıktısı: {startResult.Output}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma sonucu - Exit Code: {startResult.ExitCode}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma çıktısı: {startResult.Output}\n");
                         
                         if (startResult.ExitCode == 0)
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla başlatıldı.\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla başlatıldı.\n");
                             return true;
                         }
                         else
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başlatılamadı.\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başlatılamadı.\n");
                             return false;
                         }
                     }
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulunamadı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti bulunamadı.\n");
                     return false;
                 }
             }
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet doğrulama hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet doğrulama hatası: {ex.Message}\n");
                 return false;
             }
         }
@@ -9875,7 +10945,7 @@ echo Hizmet kurulum işlemi tamamlandı.
             try
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başlatılıyor...\n");
                 
                 // Önce hizmetleri durdur ve kaldır
                 await PerformServiceCleanupForZapret();
@@ -9897,32 +10967,32 @@ echo Hizmet kurulum işlemi tamamlandı.
                     }
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet ön hazırlık işlemleri tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet ön hazırlık işlemleri tamamlandı.\n");
 
                 // Textbox'taki parametreleri al (blockcheck SUMMARY'den değil)
                 var parameters = txtZapretParams.Text.Trim();
                 
                 if (string.IsNullOrEmpty(parameters))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Textbox'ta parametre bulunamadı!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Textbox'ta parametre bulunamadı!\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_parameters_required"), 
                         LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kullanılacak parametreler: {parameters}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kullanılacak parametreler: {parameters}\n");
 
                 // DNS ayarları yap (sadece switch aktifse)
                 var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
                 if (enableAutoDNS)
                 {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
                 await SetModernDNSSettingsAsync();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
                 }
 
                 // Zapret hizmetini kur (blockcheck olmadan, direkt parametrelerle)
@@ -9930,7 +11000,7 @@ echo Hizmet kurulum işlemi tamamlandı.
                 
                 if (success)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başarıyla tamamlandı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başarıyla tamamlandı.\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_custom_service_success"), 
                         LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
                     
@@ -9939,7 +11009,7 @@ echo Hizmet kurulum işlemi tamamlandı.
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başarısız!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet kurulumu başarısız!\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_custom_service_failed"), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                 }
@@ -9947,7 +11017,7 @@ echo Hizmet kurulum işlemi tamamlandı.
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet işlemi hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret özel hizmet işlemi hatası: {ex.Message}\n");
                 System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_custom_service_error").Replace("{0}", ex.Message), 
                     LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
@@ -10002,29 +11072,29 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             try
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti direkt kurulumu başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti direkt kurulumu başlatılıyor...\n");
 
                 // Mevcut "zapret" hizmetini durdur ve kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut zapret hizmeti kontrol ediliyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut zapret hizmeti kontrol ediliyor...\n");
                 
                 try
                 {
                     var stopResult = await RunCommandAsync("sc", "stop zapret");
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc stop zapret sonucu: {stopResult}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc stop zapret sonucu: {stopResult}\n");
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret hizmeti durdurma hatası (muhtemelen hizmet yok): {ex.Message}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret hizmeti durdurma hatası (muhtemelen hizmet yok): {ex.Message}\n");
                 }
 
                 try
                 {
                     var deleteResult = await RunCommandAsync("sc", "delete zapret");
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc delete zapret sonucu: {deleteResult}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc delete zapret sonucu: {deleteResult}\n");
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret hizmeti silme hatası (muhtemelen hizmet yok): {ex.Message}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret hizmeti silme hatası (muhtemelen hizmet yok): {ex.Message}\n");
                 }
 
                 // Hizmet silme işleminin tamamlanmasını bekle
@@ -10034,17 +11104,19 @@ echo Hizmet kurulum işlemi tamamlandı.
                 var localZapretPath = GetLocalAppDataZapretPath();
                 var serviceInstallScriptPath = Path.Combine(localZapretPath, "zapret-winws", "service_install_splitwireturkey.cmd");
 
-                // Parametreleri birleştir (--wf-tcp=80,443 --wf-udp=443,50000,50100 + kullanıcı parametreleri)
-                var combinedParameters = $"--wf-tcp=80,443 --wf-udp=443,50000,50100 {parameters}";
+                // NOT: eski zapret'in "--wf-tcp=80,443 --wf-udp=..." önekini artık EKLEMİYORUZ --
+                // Zapret2 hazır ayarları/manuel parametreler (--wf-l3=... --wf-tcp-out=... ...)
+                // kendi başına tam bir filtre tanımı, eski sözdizimiyle birleştirilemez.
+                var combinedParameters = parameters;
                 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Birleştirilmiş parametreler: {combinedParameters}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Birleştirilmiş parametreler: {combinedParameters}\n");
 
                 // Hizmet kurulum script'ini oluştur
                 await CreateServiceInstallScript(serviceInstallScriptPath, combinedParameters);
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i oluşturuldu: {serviceInstallScriptPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i oluşturuldu: {serviceInstallScriptPath}\n");
 
                 // Script'i çalıştır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i çalıştırılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i çalıştırılıyor...\n");
                 
                 var psi = new ProcessStartInfo
                 {
@@ -10065,20 +11137,22 @@ echo Hizmet kurulum işlemi tamamlandı.
                     
                     await process.WaitForExitAsync();
                     
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i tamamlandı. Exit Code: {process.ExitCode}\n");
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Çıktı: {output}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i tamamlandı. Exit Code: {process.ExitCode}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Çıktı: {output}\n");
                     if (!string.IsNullOrEmpty(error))
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hata: {error}\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hata: {error}\n");
                     }
 
                     if (process.ExitCode == 0)
                     {
-                        // Hizmeti başlat
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başlatılıyor...\n");
-                        
-                        var startResult = await RunCommandAsync("sc", "start zapret");
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc start zapret sonucu: {startResult}\n");
+                        // NOT: service_install_splitwireturkey.cmd (CreateServiceInstallScript) kendi
+                        // icinde "sc create" + "sc start %SERVICE_NAME%" YAPIYOR -- script Exit Code 0
+                        // ile bittiyse hizmet ZATEN calisiyordur. Burada AYRICA "sc start zapret"
+                        // cagirmak sadece "[SC] StartService FAILED 1056: hizmet halihazirda calisiyor"
+                        // seklinde loglara gereksiz/yaniltici bir hata satiri ekliyordu (gercek bir
+                        // sorun degil, canli testte tespit edildi) -- kaldirildi, direkt dogrulamaya geciyoruz.
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet script icinde baslatildi, dogrulaniyor...\n");
 
                         // Hizmetin çalışıp çalışmadığını kontrol et
                         await Task.Delay(3000);
@@ -10086,30 +11160,30 @@ echo Hizmet kurulum işlemi tamamlandı.
                         
                         if (verifyResult)
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla kuruldu ve çalışıyor.\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti başarıyla kuruldu ve çalışıyor.\n");
                             return true;
                         }
                         else
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti kuruldu ancak çalışmıyor.\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmeti kuruldu ancak çalışmıyor.\n");
                             return false;
                         }
                     }
                     else
                     {
-                        File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başarısız oldu.\n");
+                        AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başarısız oldu.\n");
                         return false;
                     }
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başlatılamadı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başlatılamadı.\n");
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] InstallZapretServiceDirectly hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] InstallZapretServiceDirectly hatası: {ex.Message}\n");
                 return false;
             }
         }
@@ -10149,20 +11223,20 @@ echo Hizmet kurulum işlemi tamamlandı.
                 }
 
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret Özel Tek Seferlik başlatılıyor...\n");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parametreler: {parameters}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret Özel Tek Seferlik başlatılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parametreler: {parameters}\n");
 
                 // DNS ayarları yap (sadece switch aktifse)
                 var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
                 if (enableAutoDNS)
                 {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
                 await SetModernDNSSettingsAsync();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
                 }
 
                 // onetime_batch.cmd dosyasının yolunu al
@@ -10171,13 +11245,13 @@ echo Hizmet kurulum işlemi tamamlandı.
 
                 if (!File.Exists(onetimeBatchPath))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd dosyası bulunamadı: {onetimeBatchPath}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd dosyası bulunamadı: {onetimeBatchPath}\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "onetime_batch_not_found"), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                     return;
                 }
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd çalıştırılıyor: {onetimeBatchPath}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd çalıştırılıyor: {onetimeBatchPath}\n");
 
                 // CMD dosyasını parametrelerle çalıştır
                 var psi = new ProcessStartInfo
@@ -10191,16 +11265,16 @@ echo Hizmet kurulum işlemi tamamlandı.
                 using var process = Process.Start(psi);
                 if (process != null)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd başlatıldı. Process ID: {process.Id}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd başlatıldı. Process ID: {process.Id}\n");
                     ShowLoading(false);
                     // Process'in tamamlanmasını bekle
                     await Task.Run(() => process.WaitForExit());
                     
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd tamamlandı. Exit Code: {process.ExitCode}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd tamamlandı. Exit Code: {process.ExitCode}\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd başlatılamadı!\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd başlatılamadı!\n");
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "onetime_batch_start_failed"), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                 }
@@ -10208,15 +11282,16 @@ echo Hizmet kurulum işlemi tamamlandı.
             catch (Exception ex)
             {
                 var zapretLogPath = GetZapretLogPath();
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret Özel Tek Seferlik hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret Özel Tek Seferlik hatası: {ex.Message}\n");
                 
-                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_custom_onetime_error").Replace("{0}", ex.Message), 
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_custom_onetime_error").Replace("{0}", ex.Message),
                     LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
                 // Loading ekranını gizle
                 ShowLoading(false);
+                CheckAllServices();
             }
         }
 
@@ -10235,11 +11310,11 @@ echo Hizmet kurulum işlemi tamamlandı.
                 try
                 {
                     var zapretLogPath = GetZapretLogPath();
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma işlemi başlatılıyor...\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma işlemi başlatılıyor...\n");
 
                     await RemoveZapretServices(zapretLogPath);
 
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma işlemi tamamlandı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma işlemi tamamlandı.\n");
                     
                     await ForceRefreshAllServicesAsync();
                     btnRemoveZapret.Visibility = Visibility.Collapsed;
@@ -10250,7 +11325,7 @@ echo Hizmet kurulum işlemi tamamlandı.
                 catch (Exception ex)
                 {
                     var zapretLogPath = GetZapretLogPath();
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma hatası: {ex.Message}\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret kaldırma hatası: {ex.Message}\n");
                     
                     System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_remove_error").Replace("{0}", ex.Message), 
                         LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
@@ -10266,37 +11341,37 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             try
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmetleri kaldırılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmetleri kaldırılıyor...\n");
 
                 // 1. Zapret hizmetini durdur ve kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1. Zapret hizmeti durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1. Zapret hizmeti durduruluyor...\n");
                 await StopAndRemoveService("zapret", zapretLogPath);
 
                 // 2. winws1 hizmetini durdur ve kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2. winws1 hizmeti durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2. winws1 hizmeti durduruluyor...\n");
                 await StopAndRemoveService("winws1", zapretLogPath);
 
                 // 3. winws2 hizmetini durdur ve kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3. winws2 hizmeti durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3. winws2 hizmeti durduruluyor...\n");
                 await StopAndRemoveService("winws2", zapretLogPath);
 
                 // 4. winws.exe işlemlerini durdur
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 4. winws.exe işlemleri durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 4. winws.exe işlemleri durduruluyor...\n");
                 await StopWinwsProcesses(zapretLogPath);
 
                 // 5. WinDivert hizmetini durdur ve kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 5. WinDivert hizmeti durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 5. WinDivert hizmeti durduruluyor...\n");
                 await StopAndRemoveService("WinDivert", zapretLogPath);
 
                 // Hizmet kaldırma işlemlerinin tamamlanmasını bekle
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kaldırma işlemlerinin tamamlanması bekleniyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kaldırma işlemlerinin tamamlanması bekleniyor...\n");
                 await Task.Delay(3000);
 
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmetleri başarıyla kaldırıldı.\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret hizmetleri başarıyla kaldırıldı.\n");
             }
             catch (Exception ex)
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RemoveZapretServices hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RemoveZapretServices hatası: {ex.Message}\n");
                 throw;
             }
         }
@@ -10306,17 +11381,17 @@ echo Hizmet kurulum işlemi tamamlandı.
             try
             {
                 // Hizmeti durdur
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti durduruluyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti durduruluyor...\n");
                 var stopResult = await RunCommandAsync("sc", $"stop {serviceName}");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc stop {serviceName} sonucu: {stopResult}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc stop {serviceName} sonucu: {stopResult}\n");
 
                 // Hizmetin durmasını bekle
                 await Task.Delay(2000);
 
                 // Hizmeti kaldır
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırılıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırılıyor...\n");
                 var deleteResult = await RunCommandAsync("sc", $"delete {serviceName}");
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc delete {serviceName} sonucu: {deleteResult}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc delete {serviceName} sonucu: {deleteResult}\n");
 
                 // Hizmetin kaldırılmasını bekle
                 await Task.Delay(1000);
@@ -10325,16 +11400,16 @@ echo Hizmet kurulum işlemi tamamlandı.
                 var queryResult = await RunCommandAsync("sc", $"query {serviceName}");
                 if (queryResult.Contains("The specified service does not exist") || queryResult.Contains("belirtilen hizmet mevcut değil"))
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti başarıyla kaldırıldı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti başarıyla kaldırıldı.\n");
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırılamadı veya hala mevcut.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırılamadı veya hala mevcut.\n");
                 }
             }
             catch (Exception ex)
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırırken hata: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {serviceName} hizmeti kaldırırken hata: {ex.Message}\n");
                 // Hata olsa bile devam et
             }
         }
@@ -10343,25 +11418,25 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             try
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemleri aranıyor...\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemleri aranıyor...\n");
 
                 var processes = Process.GetProcessesByName("winws");
                 if (processes.Length > 0)
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {processes.Length} adet winws.exe işlemi bulundu.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {processes.Length} adet winws.exe işlemi bulundu.\n");
 
                     foreach (var process in processes)
                     {
                         try
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi durduruluyor (PID: {process.Id})...\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi durduruluyor (PID: {process.Id})...\n");
                             process.Kill();
                             await process.WaitForExitAsync();
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi başarıyla durduruldu (PID: {process.Id}).\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi başarıyla durduruldu (PID: {process.Id}).\n");
                         }
                         catch (Exception ex)
                         {
-                            File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi durdurulurken hata (PID: {process.Id}): {ex.Message}\n");
+                            AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] winws.exe işlemi durdurulurken hata (PID: {process.Id}): {ex.Message}\n");
                         }
                         finally
                         {
@@ -10371,12 +11446,12 @@ echo Hizmet kurulum işlemi tamamlandı.
                 }
                 else
                 {
-                    File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hiç winws.exe işlemi bulunamadı.\n");
+                    AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hiç winws.exe işlemi bulunamadı.\n");
                 }
             }
             catch (Exception ex)
             {
-                File.AppendAllText(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] StopWinwsProcesses hatası: {ex.Message}\n");
+                AppendLogSafe(zapretLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] StopWinwsProcesses hatası: {ex.Message}\n");
                 // Hata olsa bile devam et
             }
         }
@@ -10416,6 +11491,23 @@ echo Hizmet kurulum işlemi tamamlandı.
             await RemoveService("zapret");
         }
 
+        private async void BtnZapret2ServiceRemove_Click(object sender, RoutedEventArgs e)
+        {
+            await RemoveService("zapret2");
+        }
+
+        private async void BtnDnscryptProxyRemove_Click(object sender, RoutedEventArgs e)
+        {
+            bool removed = await RemoveService("dnscrypt-proxy");
+            if (removed)
+            {
+                // dnscrypt-proxy kaldirildiginda sistem geneli DNS1 (127.0.0.1) otomatige
+                // geri alinmali, aksi halde hizmet artik calismadigindan internet baglantisi
+                // kesilir.
+                await ResetModernDNSSettingsAsync();
+            }
+        }
+
         private async void BtnWinDivertRemove_Click(object sender, RoutedEventArgs e)
         {
             var result = System.Windows.MessageBox.Show(
@@ -10430,28 +11522,43 @@ echo Hizmet kurulum işlemi tamamlandı.
             
             try
             {
-                // Önce GoodbyeDPI ve Zapret hizmetlerini kontrol et ve varsa kaldır
+                // Önce WinDivert kullanan motorları kontrol et ve varsa kaldır
                 if (IsServiceInstalled("GoodbyeDPI"))
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "goodbyedpi_removing_before_windivert"), 
-                        LanguageManager.GetText("messages", "info_title"), MessageBoxButton.OK, MessageBoxImage.Information);
                     await RemoveService("GoodbyeDPI");
                 }
                 
                 if (IsServiceInstalled("zapret"))
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret_removing_before_windivert"), 
-                        LanguageManager.GetText("messages", "info_title"), MessageBoxButton.OK, MessageBoxImage.Information);
                     await RemoveService("zapret");
                 }
+
+                if (IsServiceInstalled("zapret2"))
+                {
+                    await RemoveService("zapret2");
+                }
+
+                if (IsServiceInstalled("winws1"))
+                {
+                    await RemoveService("winws1");
+                }
+
+                if (IsServiceInstalled("winws2"))
+                {
+                    await RemoveService("winws2");
+                }
+
+                // WinDivert kilitlerini önlemek için ilgili işlemleri zorla sonlandır
+                KillWinDivertProcesses();
+                await Task.Delay(500);
                 
                 // Şimdi WinDivert'ı kaldır
-            await RemoveService("WinDivert");
+                await RemoveService("WinDivert");
             }
             finally
             {
                 ShowLoading(false);
-                CheckAllServices();
+                await CheckAllServicesAsync();
             }
         }
         
@@ -10459,6 +11566,12 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             try
             {
+                if (serviceName == "wiresock-client-service")
+                {
+                    if (IsServiceInstalled("WireSockAppService") || IsServiceInstalled("WireSockConnectService"))
+                        return true;
+                }
+
                 var process = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -10653,45 +11766,66 @@ echo Hizmet kurulum işlemi tamamlandı.
             }
         }
 
-        private async Task RemoveService(string serviceName)
+        private async Task<bool> RemoveService(string serviceName)
         {
             try
             {
-                var result = System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "confirm_remove_service").Replace("{0}", serviceName), 
+                var displayName = serviceName == "wiresock-client-service" ? "WireSock" : (serviceName == "dnscrypt-proxy" ? "DnsCrypt-Proxy" : serviceName);
+                var result = System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "confirm_remove_service").Replace("{0}", displayName),
                     LanguageManager.GetText("messages", "confirm"), MessageBoxButton.YesNo, MessageBoxImage.Question);
-                
-                if (result != MessageBoxResult.Yes) return;
+
+                if (result != MessageBoxResult.Yes) return false;
 
                 ShowLoading(true);
 
-                // Hizmeti durdur
-                ExecuteCommand("sc", $"stop {serviceName}");
-                await Task.Delay(2000);
+                if (serviceName == "wiresock-client-service")
+                {
+                    await _wireSockService.RemoveServiceAsync();
+                }
+                else if (serviceName == "WinDivert")
+                {
+                    KillWinDivertProcesses();
+                    await Task.Delay(500);
+                    ExecuteCommand("sc", "stop WinDivert");
+                    await Task.Delay(2000);
+                    ExecuteCommand("sc", "delete WinDivert");
+                    await Task.Delay(1000);
+                }
+                else
+                {
+                    // Hizmeti durdur
+                    ExecuteCommand("sc", $"stop {serviceName}");
+                    await Task.Delay(2000);
 
-                // Hizmeti kaldır
-                ExecuteCommand("sc", $"delete {serviceName}");
-                await Task.Delay(1000);
+                    // Hizmeti kaldır
+                    ExecuteCommand("sc", $"delete {serviceName}");
+                    await Task.Delay(1000);
+                }
 
                 ShowLoading(false);
-                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "service_removed_success").Replace("{0}", serviceName), LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
-                
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "service_removed_success").Replace("{0}", displayName), LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+
                 // Hizmet durumlarını güncelle - UI thread'de çalıştır
                 await Dispatcher.InvokeAsync(() =>
                 {
                     // Kaldırılan hizmetin durumunu hemen güncelle
                     UpdateRemovedServiceStatus(serviceName);
                 });
-                
+
                 // Tüm hizmet durumlarını kapsamlı şekilde yenile
                 await ForceRefreshAllServicesAsync();
+
+                return true;
             }
             catch (Exception ex)
             {
                 ShowLoading(false);
                 System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "service_remove_error_general").Replace("{0}", serviceName).Replace("{1}", ex.Message), LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
-                
+
                 // Hata durumunda da hizmet durumlarını güncelle
                 await ForceRefreshAllServicesAsync();
+
+                return false;
             }
         }
 
@@ -10705,6 +11839,8 @@ echo Hizmet kurulum işlemi tamamlandı.
                 "winws1" => winWS1Status,
                 "winws2" => winWS2Status,
                 "zapret" => zapretStatus,
+                "zapret2" => zapret2Status,
+                "dnscrypt-proxy" => dnscryptProxyStatus,
                 "WinDivert" => winDivertStatus,
                 "GoodbyeDPI" => null,
                 _ => null
@@ -10721,6 +11857,8 @@ echo Hizmet kurulum işlemi tamamlandı.
                 "winws1" => winWS1StatusText,
                 "winws2" => winWS2StatusText,
                 "zapret" => zapretStatusText,
+                "zapret2" => zapret2StatusText,
+                "dnscrypt-proxy" => dnscryptProxyStatusText,
                 "WinDivert" => winDivertStatusText,
                 "GoodbyeDPI" => null,
                 _ => null
@@ -10737,6 +11875,8 @@ echo Hizmet kurulum işlemi tamamlandı.
                 "winws1" => btnWinWS1Remove,
                 "winws2" => btnWinWS2Remove,
                 "zapret" => btnZapretServiceRemove,
+                "zapret2" => btnZapret2ServiceRemove,
+                "dnscrypt-proxy" => btnDnscryptProxyRemove,
                 "WinDivert" => btnWinDivertRemove,
                 "GoodbyeDPI" => btnRemoveGoodbyeDPI,
                 _ => null
@@ -10831,11 +11971,2505 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             var animationDuration = TimeSpan.FromMilliseconds(400);
             var totalHeight = _zapretManualParamsActive ? _zapretManualParamsHeight : _zapretBaseHeight;
-            
+
+            if (_zapretUseHostlistActive)
+                totalHeight += _zapretUseHostlistHeight;
+
+            if (_zapretEditHostlistActive)
+                totalHeight += _zapretEditHostlistHeight;
+
             // Pencere boyutunu animasyonlu olarak güncelle
             AnimateWindowHeight(totalHeight, animationDuration);
         }
-        
+
+        #region Zapret2
+
+        private string GetZapret2LogPath()
+        {
+            var logsDirectory = GetAppDataLogsDirectory();
+            var logPath = Path.Combine(logsDirectory, "zapret2.log");
+            
+            // Log dosyasının başına sürüm bilgisini ekle
+            AddVersionHeaderToLog(logPath);
+            
+            return logPath;
+        }
+
+        private string GetLocalAppDataZapret2Path()
+        {
+            var localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var zapret2Path = Path.Combine(localAppDataPath, "SplitWire-Turkey", "Zapret2");
+            
+            if (!Directory.Exists(zapret2Path))
+            {
+                Directory.CreateDirectory(zapret2Path);
+            }
+            
+            return zapret2Path;
+        }
+
+        private bool CheckZapret2FilesExist()
+        {
+            try
+            {
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var zapret2WinwsPath = Path.Combine(localZapret2Path, "zapret-winws2");
+
+                // Temel klasör ve dosya kontrolü
+                if (!Directory.Exists(zapret2WinwsPath) ||
+                    !File.Exists(Path.Combine(zapret2WinwsPath, "presets2.txt")) ||
+                    !File.Exists(Path.Combine(zapret2WinwsPath, "winws.exe")))
+                {
+                    return false;
+                }
+
+                // NOT: "dosya var mı" kontrolü tek başına YETERSİZ -- eski (gerçek bol-van/zapret2
+                // motoruna geçmeden önceki) bir LocalAppData önbelleği hâlâ diskte kalmışsa, bu
+                // kontrol yanlışlıkla "her şey tamam" der ve EnsureZapret2FilesExist() hiç
+                // çağrılmaz; kullanıcı boş presets2.txt ve eski winws.exe ile kalır (canlı testte
+                // doğrulandı). "lua" klasörü SADECE yeni motorda var, boş presets2.txt de bariz bir
+                // eski/bozuk önbellek belirtisi -- ikisi de eski önbelleği tespit edip yeniden
+                // kopyalamaya zorluyor.
+                if (!Directory.Exists(Path.Combine(zapret2WinwsPath, "lua")) ||
+                    new FileInfo(Path.Combine(zapret2WinwsPath, "presets2.txt")).Length == 0)
+                {
+                    return false;
+                }
+
+                // blockcheck2/blockcheck.cmd dosyasının varlığını kontrol et
+                var blockcheckCmdPath = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck.cmd");
+                if (!File.Exists(blockcheckCmdPath))
+                {
+                    return false;
+                }
+
+                // blockcheck2 tarafının da gerçek motora ait olduğunu doğrula (eski önbellekte
+                // "zapret/blockcheck.sh" vardı, yenisinde "zapret/blockcheck2.sh").
+                if (!File.Exists(Path.Combine(localZapret2Path, "blockcheck2", "zapret", "blockcheck2.sh")))
+                {
+                    return false;
+                }
+
+                // NOT: "splitwire-exclude.txt" (dışlama listesi) sonradan eklendi -- eski bir
+                // LocalAppData önbelleğinde bu dosya hiç yok olabilir.
+                if (!File.Exists(Path.Combine(zapret2WinwsPath, "splitwire-exclude.txt")) ||
+                    !File.Exists(Path.Combine(zapret2WinwsPath, "splitwire-exclude.backup.txt")))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Hata durumunda false döndür
+                Debug.WriteLine($"CheckZapret2FilesExist hatası: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async void CheckAndCopyZapret2FilesIfNeeded()
+        {
+            try
+            {
+                // Eğer dosyalar zaten varsa, hiçbir şey yapma
+                if (CheckZapret2FilesExist())
+                {
+                    return;
+                }
+
+                // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
+                if (AreCriticalWinDivertFilesMissing())
+                {
+                    Debug.WriteLine("Kritik WinDivert dosyaları eksik - Zapret2 dosyaları LocalAppData'ya kopyalanmıyor");
+                    return;
+                }
+
+                // Loading overlay'i göster
+                ShowLoading(true);
+
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 sekmesi açıldığında dosya kopyalama işlemi başlatılıyor...\n");
+
+                // Dosyaları kopyala
+                var success = await EnsureZapret2FilesExist();
+                
+                if (success)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarılı. Preset'ler yükleniyor...\n");
+                    
+                    // Preset'leri yeniden yükle
+                    LoadZapret2Presets();
+                    
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Preset'ler başarıyla yüklendi.\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama başarısız!\n");
+                }
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 sekmesi açıldığında hata: {ex.Message}\n");
+                
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_copy_error").Replace("{0}", ex.Message), 
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                // Loading overlay'i gizle
+                ShowLoading(false);
+            }
+        }
+
+        private async Task ContinuouslyHideZapret2Processes(CancellationToken cancellationToken, string zapret2LogPath)
+        {
+            var hiddenProcesses = new HashSet<int>(); // Zaten gizlenmiş process'leri takip et
+            var lastCheckTime = DateTime.Now;
+            
+            try
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme başlatıldı.\n");
+                
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var currentTime = DateTime.Now;
+                    
+                                         // Her 100ms'de bir kontrol (500ms yerine) - Kullanıcı konsol pencerelerini görmesin
+                     if ((currentTime - lastCheckTime).TotalMilliseconds >= 100)
+                     {
+                         CheckAndHideNewProcesses(hiddenProcesses, zapret2LogPath);
+                         lastCheckTime = currentTime;
+                     }
+                    
+                    // Kısa bekleme ile responsive ol
+                    await Task.Delay(50, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal cancellation - beklenen durum
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i iptal edildi.\n");
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hibrit process gizleme hatası: {ex.Message}\n");
+            }
+        }
+
+        // alimali54/zapret-win-turkey'in _GetActiveStrategyString fonksiyonundaki Zapret2 ISS
+        // hazır ayarları (Turk Telekom, Superonline, Vodafone vb.) -- kullanıcının isteği üzerine
+        // birebir aynı isim/strateji ile bizim presets2.txt listemize de eklendi. Yeni kurulumlar
+        // paketlenmiş varsayılan presets2.txt'den bunları zaten alır (bkz. AddToRoot\res\zapret\
+        // zapret-winws2\presets2.txt); bu fonksiyon ise GÜNCELLEME yapan (LocalAppData'da zaten
+        // eski bir presets2.txt'si olan) kullanıcılar için de eksikse ekler -- var olan
+        // kullanıcı ayarlarını (ör. Blockcheck ile bulunmuş presetler) SİLMEDEN.
+        private static readonly (string Name, string Args)[] _zapret2IspPresets = new[]
+        {
+            ("Turk Telekom", "--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1"),
+            ("Superonline", "--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1"),
+            ("Vodafone", "--payload=tls_client_hello --lua-desync=multisplit:blob=fake_default_tls:ip_ttl=5:pos=2:nodrop:repeats=1"),
+            ("Turksat Kablonet", "--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1"),
+            ("Telekom Mobil", "--payload=tls_client_hello --lua-desync=fake:blob=0x00000000:ip_ttl=5:repeats=1"),
+            ("Turkcell Mobil", "--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1"),
+            ("Vodafone Mobil", "--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1"),
+        };
+
+        private void EnsureZapret2IspPresets(string presetsPath)
+        {
+            try
+            {
+                if (!File.Exists(presetsPath))
+                {
+                    return; // henüz hiç extract edilmemiş, presets2.txt paketlenmiş haliyle gelecek
+                }
+
+                var lines = File.ReadAllLines(presetsPath).ToList();
+
+                // ISS hazır ayarları (Turk Telekom vb.) her zaman listenin EN BAŞINDA olmalı --
+                // önce bu satırları (zaten varsa, hangi sırada olurlarsa olsunlar) ayıklıyoruz,
+                // sonra kanonik sırayla en başa geri koyuyoruz. Böylece hem ilk kurulumda hem
+                // de daha önceki bir sürümde EN ALTA eklenmiş olan kullanıcılarda da doğru
+                // sıraya taşınmış olur.
+                var ispNames = new HashSet<string>(_zapret2IspPresets.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+                var otherLines = lines.Where(l =>
+                {
+                    var name = l.Contains(":") ? l.Split(new[] { ':' }, 2)[0].Trim() : null;
+                    return name == null || !ispNames.Contains(name);
+                }).ToList();
+
+                var newLines = new List<string>();
+                foreach (var p in _zapret2IspPresets)
+                {
+                    newLines.Add($"{p.Name}:{p.Args}");
+                }
+                newLines.AddRange(otherLines);
+
+                if (!newLines.SequenceEqual(lines))
+                {
+                    File.WriteAllLines(presetsPath, newLines);
+                }
+            }
+            catch
+            {
+                // sessizce geç -- preset listesi zaten var olan içerikle çalışmaya devam eder
+            }
+        }
+
+        private void LoadZapret2Presets()
+        {
+            try
+            {
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var presetsPath = Path.Combine(localZapret2Path, "zapret-winws2", "presets2.txt");
+
+                EnsureZapret2IspPresets(presetsPath);
+
+                _zapret2Presets.Clear();
+                cmbZapret2Presets.Items.Clear();
+
+                if (File.Exists(presetsPath))
+                {
+                    var lines = File.ReadAllLines(presetsPath);
+                    for (int i = 0; i < lines.Length; i++)
+                    {
+                        if (!string.IsNullOrWhiteSpace(lines[i]))
+                        {
+                            var line = lines[i].Trim();
+                            
+                            // Yeni format: "İsim:Parametreler"
+                            if (line.Contains(":"))
+                            {
+                                var parts = line.Split(new[] { ':' }, 2); // Sadece ilk : ile böl
+                                if (parts.Length == 2)
+                                {
+                                    var presetName = parts[0].Trim();
+                                    var presetParams = parts[1].Trim();
+                                    
+                                    _zapret2Presets.Add(presetParams); // Parametreleri sakla
+                                    cmbZapret2Presets.Items.Add(presetName); // İsimleri göster
+                                }
+                            }
+                            else
+                            {
+                                // Eski format desteği (geriye dönük uyumluluk)
+                                _zapret2Presets.Add(line);
+                                cmbZapret2Presets.Items.Add($"Önayar {i + 1}");
+                            }
+                        }
+                    }
+                }
+
+                if (cmbZapret2Presets.Items.Count > 0)
+                {
+                    cmbZapret2Presets.SelectedIndex = 0;
+                }
+                else
+                {
+                    // Eğer preset yoksa, kullanıcıya bilgi ver
+                    cmbZapret2Presets.Items.Add("Zapret2 dosyaları bulunamadı");
+                    cmbZapret2Presets.SelectedIndex = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_presets_load_error").Replace("{0}", ex.Message), 
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private async Task<bool> EnsureZapret2FilesExist()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                
+                // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
+                if (AreCriticalWinDivertFilesMissing())
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kritik WinDivert dosyaları eksik olduğu için LocalAppData'ya kopyalama işlemi yapılmıyor.\n");
+                    Debug.WriteLine("Kritik WinDivert dosyaları eksik - Zapret2 dosyaları LocalAppData'ya kopyalanmıyor");
+                    return false;
+                }
+                
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var sourceZapret2Path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "zapret");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 dosyaları kontrol ediliyor...\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kaynak klasör: {sourceZapret2Path}\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hedef klasör: {localZapret2Path}\n");
+                
+                // Kaynak klasör kontrolü
+                if (!Directory.Exists(sourceZapret2Path))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Kaynak klasör bulunamadı!\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_source_folder_not_found").Replace("{0}", sourceZapret2Path), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    return false;
+                }
+
+                // Local klasörü her zaman yeniden oluştur (güncel dosyalar için)
+                if (Directory.Exists(localZapret2Path))
+                {
+                    // ÖNEMLİ: "zapret2" hizmeti hâlâ çalışıyorsa winws.exe (Cygwin ikilisi)
+                    // zapret-winws2\cygwin1.dll dosyasını hafızasına yüklemiş ve kilitlemiş
+                    // olur -- bu durumda aşağıdaki silme/kopyalama "Access to the path
+                    // 'cygwin1.dll' is denied" hatasıyla başarısız olur (canlı testte
+                    // doğrulandı: programı Zapret2 aktifken güncelleyip yeniden açınca).
+                    // Silmeden önce hizmeti durdurup dosya kilidinin serbest kalmasını sağlıyoruz.
+                    // AYRICA WinDivert TEK ve PAYLAŞILAN bir kernel sürücüsü (bkz.
+                    // EnsureNoOtherWinDivertEngineIsActive) -- Zapret veya GoodbyeDPI aktifken
+                    // WinDivert'i durdurmaya çalışmak "STOP_PENDING" durumunda askıda
+                    // kalabiliyor (canlı testte doğrulandı: reboot bile GEREKMEDİ, sadece
+                    // gerçek tüketiciyi -- GoodbyeDPI'ı -- durdurmak WinDivert'i anında
+                    // STOPPED'a geçirdi). Bu yardımcı fonksiyon diğer tüm WinDivert
+                    // motorlarını durdurup WinDivert'in GERÇEKTEN durduğunu doğruluyor.
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kilidini önlemek için zapret2 hizmeti durduruluyor...\n");
+                    ExecuteCommand("sc", "stop zapret2");
+                    await Task.Delay(1000);
+                    await EnsureNoOtherWinDivertEngineIsActive(zapret2LogPath, "zapret2");
+
+                    // Servisler DIŞINDA, blockcheck2 taramasının kendi başlattığı ham bash.exe/
+                    // winws2.exe süreçleri (servis değil) önceki bir taramadan askıda kalmış
+                    // olabilir ve WorkingDirectory'leri tam olarak "blockcheck2" klasörü
+                    // olduğundan, Windows o klasörü CWD olarak kilitli tutup "being used by
+                    // another process" hatasına yol açabiliyor (canlı testte doğrulandı). Bkz.
+                    // KillAllStrayEngineProcesses.
+                    KillAllStrayEngineProcesses(zapret2LogPath, Path.Combine(localZapret2Path, "zapret-winws2", "killall.exe"));
+
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut local klasör siliniyor...\n");
+                    if (DeleteDirectoryWithRetry(localZapret2Path, zapret2LogPath))
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör silindi.\n");
+                    }
+                }
+
+                // Local klasörü oluştur
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local klasör oluşturuluyor...\n");
+                Directory.CreateDirectory(localZapret2Path);
+
+                // Dosyaları kopyala
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosyalar kopyalanıyor...\n");
+                await Task.Run(() => CopyDirectory(sourceZapret2Path, localZapret2Path));
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya kopyalama tamamlandı.\n");
+                
+                // Zapret2 Otomatik Kurulum için özel dosyaları kopyala
+                var sourceHiddenCmdPath = Path.Combine(sourceZapret2Path, "blockcheck2", "blockcheck-hidden.cmd");
+                var destHiddenCmdPath = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck-hidden.cmd");
+                var sourceHiddenShPath = Path.Combine(sourceZapret2Path, "blockcheck2", "zapret", "blog-hidden.sh");
+                var destHiddenShPath = Path.Combine(localZapret2Path, "blockcheck2", "zapret", "blog-hidden.sh");
+                
+                // blockcheck2-hidden.cmd kopyala
+                if (File.Exists(sourceHiddenCmdPath))
+        {
+            try
+            {
+                        File.Copy(sourceHiddenCmdPath, destHiddenCmdPath, true);
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalandı.\n");
+            }
+            catch (Exception ex)
+            {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blockcheck-hidden.cmd kopyalama hatası: {ex.Message}\n");
+            }
+        }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blockcheck-hidden.cmd kaynak dosyası bulunamadı.\n");
+        }
+
+                // blog-hidden.sh kopyala
+                if (File.Exists(sourceHiddenShPath))
+        {
+            try
+            {
+                        File.Copy(sourceHiddenShPath, destHiddenShPath, true);
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalandı.\n");
+            }
+            catch (Exception ex)
+            {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] blog-hidden.sh kopyalama hatası: {ex.Message}\n");
+                    }
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: blog-hidden.sh kaynak dosyası bulunamadı.\n");
+                }
+                
+                // Kopyalama sonrası kontrol
+                if (!Directory.Exists(localZapret2Path))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Local klasör oluşturulamadı!\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_files_copy_failed"), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    return false;
+                }
+
+                // Önemli dosyaların varlığını kontrol et
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Gerekli dosyalar kontrol ediliyor...\n");
+                var requiredFiles = new[]
+                {
+                    Path.Combine(localZapret2Path, "blockcheck2", "blockcheck.cmd"),
+                };
+
+                foreach (var file in requiredFiles)
+                {
+                    if (!File.Exists(file))
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Gerekli dosya bulunamadı: {file}\n");
+                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "required_file_not_found").Replace("{0}", file), 
+                            LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                        return false;
+                    }
+                    else
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Dosya bulundu: {Path.GetFileName(file)}\n");
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_files_copy_error").Replace("{0}", ex.Message), 
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+        }
+
+        private void CmbZapret2Presets_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (cmbZapret2Presets.SelectedIndex >= 0 && cmbZapret2Presets.SelectedIndex < _zapret2Presets.Count)
+            {
+                // Önayar değiştiğinde textbox içeriğini güncelle
+                txtZapret2Params.Text = _zapret2Presets[cmbZapret2Presets.SelectedIndex];
+                
+                // Eğer manuel parametre girişi aktifse, kullanıcıya bilgi ver
+                if (chkManualParams2.IsChecked == true)
+                {
+                    // Textbox'ı görünür yap (eğer gizliyse)
+            txtZapret2Params.Visibility = Visibility.Visible;
+                }
+            }
+        }
+
+        private void ChkManualParams2_Checked(object sender, RoutedEventArgs e)
+        {
+            txtZapret2Params.Visibility = Visibility.Visible;
+            _zapret2ManualParamsActive = true;
+            
+            // Manuel parametre girişi aktif edildiğinde, mevcut seçili önayarı textbox'a yükle
+            if (cmbZapret2Presets.SelectedIndex >= 0 && cmbZapret2Presets.SelectedIndex < _zapret2Presets.Count)
+            {
+                txtZapret2Params.Text = _zapret2Presets[cmbZapret2Presets.SelectedIndex];
+            }
+            
+            // Merkezi boyut hesaplama ve güncelleme
+            UpdateZapret2WindowSize();
+        }
+
+        private void ChkManualParams2_Unchecked(object sender, RoutedEventArgs e)
+        {
+            txtZapret2Params.Visibility = Visibility.Collapsed;
+            _zapret2ManualParamsActive = false;
+            
+            // Manuel parametre girişi kapatıldığında, seçili önayarı textbox'a yükle
+            if (cmbZapret2Presets.SelectedIndex >= 0 && cmbZapret2Presets.SelectedIndex < _zapret2Presets.Count)
+            {
+                txtZapret2Params.Text = _zapret2Presets[cmbZapret2Presets.SelectedIndex];
+            }
+            
+            // Merkezi boyut hesaplama ve güncelleme
+            UpdateZapret2WindowSize();
+        }
+
+        // Zapret2 dışlama listesi (hostlist-exclude) dosya yolları -- Zapret1'deki ile aynı
+        // mantık (bkz. GetZapretHostlistPath üstündeki not).
+        private string GetZapret2HostlistPath()
+        {
+            var localZapret2Path = GetLocalAppDataZapret2Path();
+            return Path.Combine(localZapret2Path, "zapret-winws2", "splitwire-exclude.txt");
+        }
+
+        private string GetZapret2HostlistBackupPath()
+        {
+            var localZapret2Path = GetLocalAppDataZapret2Path();
+            return Path.Combine(localZapret2Path, "zapret-winws2", "splitwire-exclude.backup.txt");
+        }
+
+        private void LoadZapret2Hostlist()
+        {
+            try
+            {
+                var backupPath = GetZapret2HostlistBackupPath();
+                txtZapret2Hostlist.Text = File.Exists(backupPath) ? File.ReadAllText(backupPath) : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"LoadZapret2Hostlist hatası: {ex.Message}");
+            }
+        }
+
+        private void ChkZapret2UseHostlist_Checked(object sender, RoutedEventArgs e)
+        {
+            if (editHostlistPanelZapret2 != null)
+                editHostlistPanelZapret2.Visibility = Visibility.Visible;
+            _zapret2UseHostlistActive = true;
+
+            if (!IsLoaded) return;
+
+            try
+            {
+                var hostlistPath = GetZapret2HostlistPath();
+                var backupPath = GetZapret2HostlistBackupPath();
+                if (File.Exists(backupPath))
+                {
+                    File.Copy(backupPath, hostlistPath, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ChkZapret2UseHostlist_Checked hatası: {ex.Message}");
+            }
+
+            UpdateZapret2WindowSize();
+        }
+
+        private void ChkZapret2UseHostlist_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (editHostlistPanelZapret2 != null)
+                editHostlistPanelZapret2.Visibility = Visibility.Collapsed;
+            chkZapret2EditHostlist.IsChecked = false;
+            txtZapret2Hostlist.Visibility = Visibility.Collapsed;
+            btnZapret2SaveHostlist.Visibility = Visibility.Collapsed;
+            _zapret2UseHostlistActive = false;
+            _zapret2EditHostlistActive = false;
+
+            if (!IsLoaded)
+            {
+                UpdateZapret2WindowSize();
+                return;
+            }
+
+            try
+            {
+                var hostlistPath = GetZapret2HostlistPath();
+                var backupPath = GetZapret2HostlistBackupPath();
+                if (File.Exists(hostlistPath))
+                {
+                    File.Copy(hostlistPath, backupPath, true);
+                }
+                File.WriteAllText(hostlistPath, string.Empty);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ChkZapret2UseHostlist_Unchecked hatası: {ex.Message}");
+            }
+
+            UpdateZapret2WindowSize();
+        }
+
+        private void ChkZapret2EditHostlist_Checked(object sender, RoutedEventArgs e)
+        {
+            txtZapret2Hostlist.Visibility = Visibility.Visible;
+            btnZapret2SaveHostlist.Visibility = Visibility.Visible;
+            LoadZapret2Hostlist();
+            _zapret2EditHostlistActive = true;
+            UpdateZapret2WindowSize();
+        }
+
+        private void ChkZapret2EditHostlist_Unchecked(object sender, RoutedEventArgs e)
+        {
+            txtZapret2Hostlist.Visibility = Visibility.Collapsed;
+            btnZapret2SaveHostlist.Visibility = Visibility.Collapsed;
+            _zapret2EditHostlistActive = false;
+            UpdateZapret2WindowSize();
+        }
+
+        private void BtnZapret2SaveHostlist_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var content = txtZapret2Hostlist.Text ?? string.Empty;
+                var hostlistPath = GetZapret2HostlistPath();
+                var backupPath = GetZapret2HostlistBackupPath();
+
+                File.WriteAllText(hostlistPath, content);
+                File.WriteAllText(backupPath, content);
+
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_hostlist_saved"),
+                    LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_hostlist_save_error").Replace("{0}", ex.Message),
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnHelpZapret2_Click(object sender, RoutedEventArgs e)
+        {
+            // Mevcut tema durumunu kontrol et
+            bool isDarkMode = btnThemeToggle.IsChecked == true;
+            
+            var infoWindow = new Window
+            {
+                Title = LanguageManager.GetText("zapret2_help", "title"),
+                Width = 500,
+                Height = 400,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = ResizeMode.NoResize,
+                Background = isDarkMode ? 
+                    new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1c1c1d")) :
+                    System.Windows.Media.Brushes.White
+            };
+
+            // Görev çubuğu rengini ayarla - pencere yüklendikten sonra
+            if (isDarkMode && _isTaskbarDarkModeSupported)
+            {
+                infoWindow.Loaded += (s, args) =>
+                {
+                    try
+                    {
+                        var hwnd = new System.Windows.Interop.WindowInteropHelper(infoWindow).Handle;
+                        if (hwnd != IntPtr.Zero)
+                        {
+                            int value = 1;
+                            int result = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+                            if (result != 0)
+                            {
+                                result = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, ref value, sizeof(int));
+                            }
+                            Debug.WriteLine($"Yardım penceresi görev çubuğu karanlık mod ayarlandı: {result == 0}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Yardım penceresi görev çubuğu karanlık mod ayarlanırken hata: {ex.Message}");
+                    }
+                };
+            }
+
+            var mainGrid = new Grid();
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var scrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Margin = new Thickness(20)
+            };
+
+            var contentStack = new StackPanel();
+            
+            var titleText = new TextBlock
+            {
+                Text = LanguageManager.GetText("zapret2_help", "page_title"),
+                FontSize = 16,
+                FontWeight = FontWeights.Bold,
+                FontFamily = new System.Windows.Media.FontFamily("pack://application:,,,/Resources/#Poppins Bold"),
+                TextAlignment = TextAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 20),
+                Foreground = isDarkMode ? System.Windows.Media.Brushes.White : System.Windows.Media.Brushes.Black
+            };
+            contentStack.Children.Add(titleText);
+
+            // RichTextBox kullanarak formatlı metin oluştur
+            var helpText = new System.Windows.Controls.RichTextBox
+            {
+                FontSize = 12,
+                FontFamily = new System.Windows.Media.FontFamily("pack://application:,,,/Resources/#Poppins Regular"),
+                VerticalAlignment = VerticalAlignment.Top,
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                IsReadOnly = true,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+
+            // Metin içeriğini oluştur
+            var paragraph = new Paragraph();
+            
+            // Not - Başlığın hemen altına taşındı
+            var noteTitle = new Run(LanguageManager.GetText("zapret2_help", "note"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var noteText = new Run(LanguageManager.GetText("zapret2_help", "note_text"));
+            paragraph.Inlines.Add(noteTitle);
+            paragraph.Inlines.Add(noteText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Zapret2 Otomatik Kurulum
+            var autoTitle = new Run(LanguageManager.GetText("zapret2_help", "auto_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var autoText = new Run(LanguageManager.GetText("zapret2_help", "auto_text"));
+            paragraph.Inlines.Add(autoTitle);
+            paragraph.Inlines.Add(autoText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Tarama
+            var scanTitle = new Run(LanguageManager.GetText("zapret2_help", "scan_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var scanText = new Run(LanguageManager.GetText("zapret2_help", "scan_text"));
+            paragraph.Inlines.Add(scanTitle);
+            paragraph.Inlines.Add(scanText);
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Alt başlıklar
+            var subTitle1 = new Run(LanguageManager.GetText("zapret2_help", "fast_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var subText1 = new Run(LanguageManager.GetText("zapret2_help", "fast_text"));
+            paragraph.Inlines.Add(subTitle1);
+            paragraph.Inlines.Add(subText1);
+            paragraph.Inlines.Add(new LineBreak());
+
+            var subTitle2 = new Run(LanguageManager.GetText("zapret2_help", "standard_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var subText2 = new Run(LanguageManager.GetText("zapret2_help", "standard_text"));
+            paragraph.Inlines.Add(subTitle2);
+            paragraph.Inlines.Add(subText2);
+            paragraph.Inlines.Add(new LineBreak());
+
+            var subTitle3 = new Run(LanguageManager.GetText("zapret2_help", "full_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var subText3 = new Run(LanguageManager.GetText("zapret2_help", "full_text"));
+            paragraph.Inlines.Add(subTitle3);
+            paragraph.Inlines.Add(subText3);
+            paragraph.Inlines.Add(new LineBreak());
+
+            var scanNote = new Run(LanguageManager.GetText("zapret2_help", "scan_note"));
+            paragraph.Inlines.Add(scanNote);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Hazır Ayar
+            var presetTitle = new Run(LanguageManager.GetText("zapret2_help", "preset_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var presetText = new Run(LanguageManager.GetText("zapret2_help", "preset_text"));
+            paragraph.Inlines.Add(presetTitle);
+            paragraph.Inlines.Add(presetText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Hazır Ayarı Düzenle
+            var editTitle = new Run(LanguageManager.GetText("zapret2_help", "edit_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var editText = new Run(LanguageManager.GetText("zapret2_help", "edit_text"));
+            paragraph.Inlines.Add(editTitle);
+            paragraph.Inlines.Add(editText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Dışlama Listesi
+            var useHostlistTitle = new Run(LanguageManager.GetText("zapret2_help", "use_hostlist_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var useHostlistText = new Run(LanguageManager.GetText("zapret2_help", "use_hostlist_text"));
+            paragraph.Inlines.Add(useHostlistTitle);
+            paragraph.Inlines.Add(useHostlistText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            var editHostlistTitle = new Run(LanguageManager.GetText("zapret2_help", "edit_hostlist_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var editHostlistText = new Run(LanguageManager.GetText("zapret2_help", "edit_hostlist_text"));
+            paragraph.Inlines.Add(editHostlistTitle);
+            paragraph.Inlines.Add(editHostlistText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Önayarlı Hizmet Kur
+            var serviceTitle = new Run(LanguageManager.GetText("zapret2_help", "service_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var serviceText = new Run(LanguageManager.GetText("zapret2_help", "service_text"));
+            paragraph.Inlines.Add(serviceTitle);
+            paragraph.Inlines.Add(serviceText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Önayarlı Tek Seferlik
+            var onceTitle = new Run(LanguageManager.GetText("zapret2_help", "once_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var onceText = new Run(LanguageManager.GetText("zapret2_help", "once_text"));
+            paragraph.Inlines.Add(onceTitle);
+            paragraph.Inlines.Add(onceText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Zapret2'i Kaldır
+            var removeTitle = new Run(LanguageManager.GetText("zapret2_help", "remove_title"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var removeText = new Run(LanguageManager.GetText("zapret2_help", "remove_text"));
+            paragraph.Inlines.Add(removeTitle);
+            paragraph.Inlines.Add(removeText);
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new LineBreak());
+
+            // Not 2
+            var note2Title = new Run(LanguageManager.GetText("zapret2_help", "note2"))
+            {
+                FontWeight = FontWeights.Bold
+            };
+            var note2Text = new Run(LanguageManager.GetText("zapret2_help", "note2_text"));
+            paragraph.Inlines.Add(note2Title);
+            paragraph.Inlines.Add(note2Text);
+
+            helpText.Document = new FlowDocument(paragraph);
+            
+            // RichTextBox tema renklerini ayarla
+            if (isDarkMode)
+            {
+                helpText.Foreground = System.Windows.Media.Brushes.White;
+            }
+            else
+            {
+                helpText.Foreground = System.Windows.Media.Brushes.Black;
+            }
+            
+            contentStack.Children.Add(helpText);
+
+            scrollViewer.Content = contentStack;
+            mainGrid.Children.Add(scrollViewer);
+            Grid.SetRow(scrollViewer, 1);
+
+            // Kapat butonu
+            var closeButton = new System.Windows.Controls.Button
+            {
+                Content = LanguageManager.GetText("main_help", "close_button"),
+                Width = 100,
+                Height = 35,
+                Margin = new Thickness(0, 20, 0, 20),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Background = isDarkMode ? 
+                    new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#373738")) :
+                    System.Windows.Media.Brushes.LightGray,
+                Foreground = isDarkMode ? System.Windows.Media.Brushes.White : System.Windows.Media.Brushes.Black
+            };
+            closeButton.Click += (s, args) => infoWindow.Close();
+            Grid.SetRow(closeButton, 2);
+            mainGrid.Children.Add(closeButton);
+
+            infoWindow.Content = mainGrid;
+            infoWindow.ShowDialog();
+        }
+
+
+        private async void BtnZapret2AutoInstall_Click(object sender, RoutedEventArgs e)
+        {
+            var message = LanguageManager.GetText("messages", "confirm_zapret2_auto");
+            
+            // Kaspersky AV tespit edildiyse uyarı ekle
+            var avpProcesses = Process.GetProcessesByName("avp");
+            var avpuiProcesses = Process.GetProcessesByName("avpui");
+              if (avpProcesses.Length > 0 || avpuiProcesses.Length > 0)
+              {
+                  message += LanguageManager.GetText("messages", "kaspersky_av_warning");
+              }
+            
+            var result = System.Windows.MessageBox.Show(
+                message,
+                LanguageManager.GetText("messages", "zapret2_auto_install_title"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                ShowLoading(true);
+                
+                try
+                {
+                    var zapret2LogPath = GetZapret2LogPath();
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 otomatik kurulum başlatılıyor...\n");
+                    
+                    // Önce hizmetleri durdur ve kaldır
+                    await PerformServiceCleanupForZapret2();
+                    
+                    // Dosyalar yoksa kopyala
+                    if (!CheckZapret2FilesExist())
+                    {
+                        // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
+                        if (AreCriticalWinDivertFilesMissing())
+                        {
+                            System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "windivert_files_missing_kaspersky2"), 
+                                LanguageManager.GetText("messages", "install_error_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                            return;
+                        }
+                        
+                        if (!await EnsureZapret2FilesExist())
+                        {
+                            return;
+                        }
+                    }
+
+                    // Son olarak Zapret2 kurulumunu gerçekleştir
+                    await PerformZapret2InstallationProcess();
+            }
+            catch (Exception ex)
+            {
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_install_error").Replace("{0}", ex.Message), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    ShowLoading(false);
+                    
+                    // Hizmet durumlarını güncelle
+                    CheckAllServices();
+                }
+            }
+        }
+
+        private async Task PerformServiceCleanupForZapret2()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 için hizmet temizliği başlatılıyor...\n");
+
+                // Kurulum öncesi temizlik (Discord + tüm hizmetler)
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik yapılıyor...\n");
+                var cleanupSuccess = await PerformPreSetupCleanupAsync();
+                if (cleanupSuccess)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kurulum öncesi temizlik başarıyla tamamlandı.\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Kurulum öncesi temizlik sırasında hata oluştu.\n");
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği tamamlandı.\n");
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet temizliği hatası: {ex.Message}\n");
+                throw new Exception($"Hizmet temizliği başarısız: {ex.Message}", ex);
+            }
+        }
+
+        private async Task PerformZapret2InstallationProcess()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulum süreci başlatılıyor...\n");
+
+                // DNS ayarları (sadece switch aktifse)
+                var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
+                if (enableAutoDNS)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları uygulanıyor...\n");
+                    await SetModernDNSSettingsAsync();
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                }
+
+                // Zapret2 kurulumunu gerçekleştir
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulumu başlatılıyor...\n");
+                await RunZapret2Installation();
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulum süreci başarıyla tamamlandı.\n");
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulum süreci hatası: {ex.Message}\n");
+                throw new Exception($"Zapret2 kurulum süreci başarısız: {ex.Message}", ex);
+            }
+        }
+
+        private async Task RunZapret2Installation()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulum süreci başlatılıyor...\n");
+
+                // NOT: kayıtlı Türkiye ISS hazır ayarları artık burada servis kur/kaldır
+                // döngüsüyle DENENMİYOR (kullanıcının geri bildirimiyle çok yavaş olduğu
+                // için kaldırıldı) -- bunun yerine blockcheck2.sh'ın KENDİ test altyapısına,
+                // TÜM diğer tekniklerden ÖNCE çalışacak şekilde native olarak eklendi
+                // (bkz. res\zapret\blockcheck2\zapret\blockcheck2.d\standard\00-turkey-presets.sh).
+                // Aşağıdaki normal blockcheck2 akışı zaten bu presetleri ilk saniyelerde
+                // deneyip bulacak; ayrı bir servis kur/kaldır adımına hiç gerek kalmıyor.
+
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                // SCANLEVEL, gerçek (upstream) blockcheck2.sh'a değil, kendi yazdığımız
+                // blog-hidden.sh'daki "export SCANLEVEL=..." satırına yazılıyor (bkz. UpdateScanLevel2).
+                var blockcheck2ShPath = Path.Combine(localZapret2Path, "blockcheck2", "zapret", "blog-hidden.sh");
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Local Zapret2 yolu: {localZapret2Path}\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blog-hidden.sh yolu: {blockcheck2ShPath}\n");
+                
+                // SCANLEVEL ayarını güncelle
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncelleniyor...\n");
+                await UpdateScanLevel2(blockcheck2ShPath);
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL ayarı güncellendi.\n");
+                
+                // Zapret2 Otomatik Kurulum için özel blockcheck2-hidden.cmd dosyasını kullan
+                var blockcheck2CmdPath = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck-hidden.cmd");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2-hidden.cmd çalıştırılıyor: {blockcheck2CmdPath}\n");
+
+                // Tarama seviyesine göre "yeter sayıda strateji bulununca dur" hedefi -- bkz.
+                // GetZapret2ScanTargetCount. "force" (Tam) hariç tüm seviyelerde erken durduruyoruz,
+                // çünkü blockcheck2.sh'ın test_runner()'ı 12 test dosyasının TAMAMINI native olarak
+                // hiçbir "N tane bulunca dur" desteği olmadan çalıştırıyor -- "Hızlı" modda bile
+                // dakikalarca sürmesinin kökeni bu. Erken durdurma bunu C# tarafında telafi ediyor.
+                var scanLevelForEarlyStop = GetSelectedScanLevel2();
+                var earlyStopTargetCount = GetZapret2ScanTargetCount(scanLevelForEarlyStop);
+                var earlyStopEnabled = scanLevelForEarlyStop != "force";
+                var blockcheck2LogPathForPolling = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck.log");
+
+                // Blockcheck2 process'ini çalıştır ve bash.exe'nin kapanmasını bekle
+                await Task.Run(async () =>
+                {
+                    // Zapret2 işlemlerini gizli olarak başlatmak için özel ProcessStartInfo
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c \"{blockcheck2CmdPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        WorkingDirectory = Path.GetDirectoryName(blockcheck2CmdPath),
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        RedirectStandardInput = true
+                    };
+                    
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatılıyor...\n");
+                    
+                    using var process = Process.Start(psi);
+                    if (process != null)
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process başlatıldı. PID: {process.Id}\n");
+                        
+                        // Process ID'yi al
+                        var processId = process.Id;
+                        
+                                        // Process gizleme task'ini başlat
+                var cancellationTokenSource = new CancellationTokenSource();
+                var hideProcessTask = Task.Run(() => ContinuouslyHideZapret2Processes(cancellationTokenSource.Token, zapret2LogPath));
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i başlatıldı.\n");
+                        
+                        // KÖK NEDEN (canlı testte kesin olarak doğrulandı): "$EXEDIR/blockcheck2.sh" | tee
+                        // ... satırı, bash'i ARKA PLANDA ayrı bir alt-bash.exe olarak spawn ediyor --
+                        // dış "process" (cmd.exe /c blockcheck-hidden.cmd) bunu başlattıktan HEMEN
+                        // SONRA (saniyenin altında) kendisi kapanıyor. Yani process.WaitForExit()
+                        // İZLEDİĞİ ŞEY YANLIŞ: gerçek, uzun süren tarama BAŞKA bir bash.exe'de
+                        // çalışıyor. Eskiden bu ayrı bash.exe'yi SONRADAN buluyorduk ama
+                        // WaitForExit(10000)'in DÖNÜŞ DEĞERİNİ KONTROL ETMİYORDUK -- 10 saniye
+                        // içinde bitmezse (discord.com taraması yüzlerce strateji deniyor, dakikalarca
+                        // sürüyor) yine de "kapandı" diye loglayıp log dosyasını YARIM haliyle
+                        // okuyorduk ("çalışan strateji bulunamadı" hatasının GERÇEK kaynağı buydu).
+                        // Düzeltme: gerçek bash.exe'yi ÖNCE buluyoruz, sonra hem onun hem de erken
+                        // durdurma hedefinin TEK bir döngüde, doğru process üzerinden izleniyor.
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ana process kapanması bekleniyor (maks. 20 dakika, erken durdurma: {(earlyStopEnabled ? $"{earlyStopTargetCount} strateji" : "kapalı (Tam mod)")})...\n");
+
+                        Process realBashProcess = null;
+                        var findBashDeadline = DateTime.Now.AddSeconds(10);
+                        while (DateTime.Now < findBashDeadline && realBashProcess == null)
+                        {
+                            foreach (var candidate in Process.GetProcessesByName("bash"))
+                            {
+                                try
+                                {
+                                    if (candidate.StartTime > process.StartTime)
+                                    {
+                                        realBashProcess = candidate;
+                                        break;
+                                    }
+                                }
+                                catch { }
+                            }
+                            if (realBashProcess == null)
+                            {
+                                await Task.Delay(200);
+                            }
+                        }
+
+                        if (realBashProcess != null)
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Gerçek tarama süreci bulundu. PID: {realBashProcess.Id}\n");
+                        }
+                        else
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Gerçek bash.exe süreci bulunamadı, dış process izlenecek (yanlış sonuç riski var).\n");
+                        }
+
+                        // İzlenecek gerçek process: bulunduysa bash.exe, yoksa yedek olarak dış process.
+                        var trackedProcess = realBashProcess ?? process;
+
+                        // YENİDEN TASARIM (alimali54/zapret-win-turkey referans alınarak): o proje
+                        // sadece port 443 (HTTPS) için bulunan stratejiyi kullanıyor, sonra bunu
+                        // KURULUM SIRASINDA TÜM portlara (--wf-tcp-out=0-65535 --wf-udp-out=0-65535)
+                        // uyguluyor -- HTTP+HTTPS'i AYRI AYRI bulup "--new" ile birleştirmeye
+                        // çalışmak yerine bu çok daha basit VE ıspatlanmış şekilde çalışıyor (aynı
+                        // TCP-seviyesi teknik genelde port bağımsız çalışıyor). Bu yüzden erken
+                        // durdurma hedefini SADECE HTTPS (port 443) stratejisi sayısına göre
+                        // değerlendiriyoruz -- bkz. ProcessBlockcheckResults2'deki port genişletme.
+                        var deadline = DateTime.Now.AddMinutes(20);
+                        var mainProcessExited = false;
+                        var earlyStopped = false;
+                        var lastLoggedHttpsCount = 0;
+                        while (DateTime.Now < deadline)
+                        {
+                            trackedProcess.Refresh();
+                            if (trackedProcess.HasExited)
+                            {
+                                mainProcessExited = true;
+                                break;
+                            }
+                            if (earlyStopEnabled)
+                            {
+                                try
+                                {
+                                    if (File.Exists(blockcheck2LogPathForPolling))
+                                    {
+                                        var currentLogContent = await ReadBlockcheckLogWithRetryAsync(blockcheck2LogPathForPolling);
+                                        var httpsCount = _zapret2HttpsHitRegex.Matches(currentLogContent).Count;
+                                        if (httpsCount != lastLoggedHttpsCount)
+                                        {
+                                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Şu ana kadar bulunan çalışan HTTPS stratejisi sayısı: {httpsCount}\n");
+                                            lastLoggedHttpsCount = httpsCount;
+                                        }
+                                        if (httpsCount >= earlyStopTargetCount)
+                                        {
+                                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hedef sayıda ({earlyStopTargetCount}) HTTPS stratejisi bulundu, tarama erken sonlandırılıyor ({scanLevelForEarlyStop} modu)...\n");
+                                            earlyStopped = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                catch
+                                {
+                                    // log henüz oluşmamış veya o anda okunamıyor olabilir, döngü devam etsin
+                                }
+                            }
+                            await Task.Delay(500);
+                        }
+
+                        if (earlyStopped || !mainProcessExited)
+                        {
+                            if (!earlyStopped)
+                            {
+                                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Blockcheck2 20 dakika içinde tamamlanamadı (zaman aşımı). Process sonlandırılıyor.\n");
+                            }
+                            var killallPath = Path.Combine(localZapret2Path, "zapret-winws2", "killall.exe");
+                            GracefullyThenForceKillProcessTree(process.Id, zapret2LogPath, earlyStopped ? "Erken durdurma" : "Zaman aşımı", killallPath);
+                            if (realBashProcess != null)
+                            {
+                                GracefullyThenForceKillProcessTree(realBashProcess.Id, zapret2LogPath, earlyStopped ? "Erken durdurma (bash)" : "Zaman aşımı (bash)", killallPath);
+                            }
+                            KillZapret2StrayProcesses(process.StartTime, zapret2LogPath, killallPath);
+                            cancellationTokenSource.Cancel();
+                            if (!earlyStopped)
+                            {
+                                throw new Exception("Blockcheck2 islemi zaman asimina ugradi (20 dakika) - islem sonlandirildi. Lutfen taramayi 'Hizli' seviyesiyle tekrar deneyin.");
+                            }
+
+                            // Erken durdurma: kill sonrası dosya sistemine son satırların tam
+                            // yazılması için kısa bir an bekle (tee/unix2dos'un flush'ı için).
+                            await Task.Delay(500);
+                        }
+                        else
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Tarama süreci doğal olarak tamamlandı (PID: {trackedProcess.Id}).\n");
+                        }
+                        
+                        // Ek olarak, blockcheck.log dosyasının oluşmasını bekle
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2.log dosyası bekleniyor...\n");
+                        var logPath = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck.log");
+                        var maxWaitTime = TimeSpan.FromMinutes(30); // Maksimum 30 dakika bekle
+                        var startTime = DateTime.Now;
+                        
+                        while (!File.Exists(logPath) && (DateTime.Now - startTime) < maxWaitTime)
+                        {
+                            Thread.Sleep(1000); // 1 saniye bekle
+                        }
+                        
+                        if (!File.Exists(logPath))
+                        {
+                            var errorMsg = "blockcheck.log dosyası oluşturulamadı (30 dakika timeout)";
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                            throw new Exception(errorMsg);
+                        }
+                        
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2.log dosyası bulundu: {logPath}\n");
+                        
+                        // Process gizleme task'ini durdur
+                        cancellationTokenSource.Cancel();
+                        try
+                        {
+                            await hideProcessTask;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // Normal cancellation - beklenen durum
+                        }
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Process gizleme task'i durduruldu.\n");
+                    }
+                });
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2 tamamlandı. Sonuçlar işleniyor...\n");
+                
+                // Log dosyasını işle ve service_create.cmd'yi güncelle
+                await ProcessBlockcheckResults2();
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kurulum süreci başarıyla tamamlandı.\n");
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
+                throw new Exception($"Zapret2 kurulum süreci başarısız: {ex.Message}", ex);
+            }
+        }
+
+        private async Task UpdateScanLevel2(string blockcheck2ShPath)
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                var uiScanLevel = GetSelectedScanLevel2();
+
+                // NOT: check_domain_prolog() (blockcheck2.sh) içinde bir protokolün (örn. HTTPS)
+                // TEK SEFERLİK "bypass'sız zaten çalışıyor mu" testi başarılı olursa o protokol
+                // HİÇBİR bypass stratejisi test edilmeden atlanıyordu -- canlı olayda discord.com
+                // HTTPS'i böyle atlanmış, kurulan hizmet sadece port 80'i kapsamış, bu da
+                // pornhub.com ERR_CONNECTION_RESET ve Discord "Update failed" hatalarına yol
+                // açmıştı. Bunu SCANLEVEL=force ile çözmeyi denedim ama force AYNI ZAMANDA diğer
+                // TÜM iç hız optimizasyonlarını (TTL döngüsü ilk başarıda durma, wssize tekrar
+                // denemesini atlama vb.) da kapatıyor -- canlı testte doğrulandı, HTTP taraması
+                // TEK BAŞINA dakikalarca sürüp HTTPS'e hiç sıra gelmiyordu ("Hızlı" modun asıl
+                // amacını tamamen boşa çıkarıyordu). Bunun yerine SADECE o tek satırı doğrudan
+                // blockcheck2.sh kaynağında (AddToRoot) nötrledik (bkz. blockcheck2.sh'daki not) --
+                // SCANLEVEL burada yine kullanıcının seçtiği gerçek seviye, diğer tüm hız
+                // optimizasyonları korunuyor, sadece "protokolü tamamen atla" davranışı devre dışı.
+                var vendorScanLevel = uiScanLevel;
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleniyor: {vendorScanLevel}\n");
+
+                var content = await File.ReadAllTextAsync(blockcheck2ShPath);
+
+                // NOT: Gerçek (upstream) blockcheck2.sh, SCANLEVEL'i "SCANLEVEL=${SCANLEVEL:-...}"
+                // şeklinde DEĞİL, "[ -n "$SCANLEVEL" ] || { SCANLEVEL=standard; ...; ask_list ...; }"
+                // şeklinde kontrol ediyor -- vendor script'ine dokunmuyoruz, bunun yerine kendi
+                // yazdığımız blog-hidden.sh'daki "export SCANLEVEL=..." satırını güncelliyoruz;
+                // bu satır bloğu, blockcheck2.sh'ın "$SCANLEVEL boş mu" kontrolünü baştan
+                // atlatıyor (hem interaktif soruyu önlüyor hem de seçili seviyeyi uyguluyor).
+                content = System.Text.RegularExpressions.Regex.Replace(content,
+                    @"export SCANLEVEL=\w+", $"export SCANLEVEL={vendorScanLevel}");
+
+                await File.WriteAllTextAsync(blockcheck2ShPath, content);
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL başarıyla güncellendi: {vendorScanLevel}\n");
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SCANLEVEL güncelleme hatası: {ex.Message}\n");
+                throw new Exception($"SCANLEVEL güncelleme hatası: {ex.Message}", ex);
+            }
+        }
+
+        private string GetSelectedScanLevel2()
+        {
+            return cmbScanLevel2.SelectedIndex switch
+            {
+                0 => "quick",
+                1 => "standard",
+                2 => "force",
+                _ => "quick"
+            };
+        }
+
+        // Tarama seviyesine göre "kaç çalışan strateji bulununca dur" hedefi.
+        // Hızlı: ilk bulunanı kullan. Standart: 5 bulunca 5.'yi kullan, diğer 4'ü
+        // "Blockcheck [1-4]" olarak hazır ayarlara ekle. Tam (force): tam/kapsamlı
+        // taramaya izin ver (erken durdurma YOK, bkz. RunZapret2Installation'daki
+        // earlyStopEnabled), ilk 50 bulunanı hazır ayarlara ekle ve 50.'yi kullan.
+        private int GetZapret2ScanTargetCount(string scanLevel)
+        {
+            return scanLevel switch
+            {
+                "quick" => 1,
+                "standard" => 5,
+                "force" => 50,
+                _ => 1
+            };
+        }
+
+        // blockcheck2.sh'ın HER başarılı deneme için ürettiği "- curl_test_XXX ipv4 <domain> :
+        // winws2 <argümanlar>" satırını, hemen ardından gelen "!!!!! AVAILABLE !!!!!" ile
+        // eşleştirir. blockcheck2'nin KENDİ nihai "working strategy found" özeti (eskiden
+        // kullandığımız tek regex) 12 test dosyasının TAMAMI bitmeden hiç üretilmiyor -- erken
+        // durdurma/hedef-sayı özelliği için ham, tek-tek deneme sonuçlarına ihtiyacımız var.
+        // ÖNEMLİ BUG (canlı testte bulundu): önceki hâli sadece "curl_test_https_tls12" arıyordu
+        // -- rutracker.org testinde HTTPS engelliydi, HTTP zaten açıktı, o yüzden çalıştı. Ama
+        // discord.com testinde TAM TERSİ: HTTP engelli, HTTPS zaten açık (SCANLEVEL=quick bu
+        // yüzden HTTPS testini tamamen atlıyor) -- gerçek çalışan stratejiler "curl_test_http"
+        // (https_tls12 değil) satırlarında bulunuyordu, eski regex bunları hiç yakalamıyordu ve
+        // "log dosyasında çalışan strateji bulunamadı" hatası veriyordu, oysa log 37 tane
+        // AVAILABLE içeriyordu. Protokol adını \S+ ile genelleştirdik -- http, https_tls12,
+        // https_tls13, http3 hepsini kapsıyor.
+        private static readonly System.Text.RegularExpressions.Regex _zapret2HitRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"- curl_test_\S+ ipv\d+ \S+ : winws2 (?<args>.+?)\r?\n!!!!! AVAILABLE !!!!!",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // PROTOKOLE ÖZEL versiyonlar: port 80 (HTTP) ve port 443 (HTTPS_TLS12) ayrı ayrı
+        // sayılmalı -- SCANLEVEL artık her zaman "force" olduğundan (bkz. UpdateScanLevel2)
+        // her iki protokol de mutlaka test ediliyor, ama erken durdurma hedefine SADECE bir
+        // protokolden (genelde HTTP, çünkü ilk test edilen o) ulaşılırsa süreç orada kesilip
+        // HTTPS'in hiç test edilmeden kalması riski var -- bu da tam olarak "pornhub.com'da
+        // ERR_CONNECTION_RESET, Discord güncelleme hatası" şikayetinin kökeniydi (kurulan
+        // hizmet sadece port 80'i kapsıyordu). Artık her iki protokolden de hedef sayıda
+        // strateji bulununca durduruluyor, ikisi de son kurulan komuta ekleniyor.
+        private static readonly System.Text.RegularExpressions.Regex _zapret2HttpHitRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"- curl_test_http ipv\d+ \S+ : winws2 (?<args>.+?)\r?\n!!!!! AVAILABLE !!!!!",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex _zapret2HttpsHitRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"- curl_test_https_tls12 ipv\d+ \S+ : winws2 (?<args>.+?)\r?\n!!!!! AVAILABLE !!!!!",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        // ÖNEMLİ (canlı testte doğrulandı, ciddi bir yan etki): winws2.exe'yi taskkill /F veya
+        // Process.Kill() ile SERT şekilde sonlandırmak (TerminateProcess), WinDivertClose()
+        // çağrılmadan process'in ölmesine yol açabiliyor -- bu durumda "WinDivert" kernel
+        // sürücüsü STOP_PENDING durumunda askıda kalıyor (PID:0, "ControlService FAILED 1061:
+        // hizmet şu anda denetim iletilerini kabul edemez") ve YENİDEN BAŞLATMAYA kadar bu
+        // şekilde kalıyor -- bu da sonraki TÜM Zapret/Zapret2/GoodbyeDPI kurulumlarını "Access
+        // to the path 'WinDivert64.sys' is denied" hatasıyla bozuyor. taskkill (force'suz) ise
+        // hiçbir top-level penceresi olmayan bu gizli konsol süreçleri için genelde bir NO-OP
+        // (Win32 seviyesinde gerçek bir "nazik kapat" sinyali yok). Bunun yerine winws2.exe
+        // klasöründe zaten BUNDLE edilmiş gerçek Cygwin "killall.exe" (PSmisc) aracını
+        // kullanıyoruz -- winws2 kendisi de Cygwin ikilisi olduğundan cygwin1.dll üzerinden
+        // GERÇEK bir SIGTERM alıyor, bu da WinDivertClose()'un normal sinyal/atexit yoluyla
+        // çalışma şansını taskkill'e göre çok daha güvenilir kılıyor. killallExePath verilmezse
+        // (Zapret1/Zapret2 klasörü bulunamazsa) doğrudan taskkill akışına düşülür.
+        private void GracefullyThenForceKillProcessTree(int pid, string logPath, string logPrefix, string killallExePath = null)
+        {
+            if (!string.IsNullOrEmpty(killallExePath) && File.Exists(killallExePath))
+            {
+                try { ExecuteCommand(killallExePath, "-q -s TERM winws2"); } catch { }
+                try { ExecuteCommand(killallExePath, "-q -s TERM bash"); } catch { }
+                Thread.Sleep(1500);
+            }
+            try { ExecuteCommand("taskkill", $"/T /PID {pid}"); } catch { }
+            Thread.Sleep(1500);
+            try
+            {
+                var proc = Process.GetProcessById(pid);
+                if (proc != null && !proc.HasExited)
+                {
+                    AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {logPrefix}: nazik durdurma yetersiz kaldı, zorla sonlandırılıyor. PID: {pid}\n");
+                    try { ExecuteCommand("taskkill", $"/F /T /PID {pid}"); } catch { }
+                }
+                else
+                {
+                    AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {logPrefix}: process nazikçe kapandı. PID: {pid}\n");
+                }
+            }
+            catch (ArgumentException)
+            {
+                // Process zaten kapanmış (GetProcessById exception fırlatır) -- sorun değil.
+                AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {logPrefix}: process nazikçe kapandı. PID: {pid}\n");
+            }
+            catch { }
+        }
+
+        // Erken durdurma tetiklendiğinde (veya 20 dakikalık genel zaman aşımında) ana process
+        // ağacının dışında kalmış olabilecek bash/winws2 kalıntılarını da temizler -- taskkill
+        // /T bazen detached alt süreçleri yakalayamıyor (canlı testte gözlemlendi, aynı sebep
+        // zaten mevcut bash-bekleme döngüsünde de vardı). Aynı "önce nazikçe" ilkesiyle: winws2
+        // için sert kill WinDivert sürücüsünü askıda bırakabildiğinden (bkz.
+        // GracefullyThenForceKillProcessTree), önce taskkill (force'suz) deniyoruz.
+        private void KillZapret2StrayProcesses(DateTime afterTime, string zapret2LogPath, string killallExePath = null)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(killallExePath) && File.Exists(killallExePath))
+                {
+                    try { ExecuteCommand(killallExePath, "-q -s TERM winws2"); } catch { }
+                    try { ExecuteCommand(killallExePath, "-q -s TERM bash"); } catch { }
+                }
+
+                var candidates = new List<Process>();
+                foreach (var name in new[] { "bash", "winws2" })
+                {
+                    foreach (var proc in Process.GetProcessesByName(name))
+                    {
+                        try
+                        {
+                            if (proc.StartTime > afterTime)
+                            {
+                                try { ExecuteCommand("taskkill", $"/PID {proc.Id}"); } catch { }
+                                candidates.Add(proc);
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                if (candidates.Count == 0) return;
+
+                Thread.Sleep(2000);
+
+                foreach (var proc in candidates)
+                {
+                    try
+                    {
+                        proc.Refresh();
+                        if (!proc.HasExited)
+                        {
+                            proc.Kill();
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Erken durdurma: {proc.ProcessName} process zorla sonlandırıldı. PID: {proc.Id}\n");
+                        }
+                        else
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Erken durdurma: {proc.ProcessName} process nazikçe kapandı. PID: {proc.Id}\n");
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        // GENEL/SAĞLAM KİLİT-ÖNLEME ÖNLEMİ (birikimli hata geçmişi: cygwin1.dll -> WinDivert64.sys
+        // -> blockcheck2 klasörünün kendisi -- her seferinde farklı bir dosya/klasör kilitleniyor
+        // çünkü kilitleyen tek tip değil). Kök neden: EnsureZapretFilesExist/EnsureZapret2FilesExist
+        // SADECE servisleri (zapret/zapret2/GoodbyeDPI/WinDivert) durduruyordu -- ama blockcheck2
+        // taramasının kendi başlattığı HAM bash.exe/winws2.exe süreçleri (servis DEĞİL, doğrudan
+        // Process.Start ile başlatılan) bazen tam kapanmadan (örn. önceki bir tarama yarıda kesilmiş,
+        // uygulama zorla kapatılmış vs.) askıda kalabiliyor -- ve WorkingDirectory'leri TAM OLARAK
+        // silinmeye çalışılan "blockcheck2" klasörü olduğundan, Windows o klasörü process'in CWD'si
+        // olarak kilitli tutuyor, silme "being used by another process" hatasıyla başarısız oluyor.
+        // Bu fonksiyon: StartTime filtresi OLMADAN (o an ne kadar eski olursa olsun) TÜM
+        // bash/winws/winws2 süreçlerini nazikçe (varsa killall.exe ile), sonra gerekirse sert
+        // şekilde sonlandırır. Klasör silinmeden HEMEN önce çağrılmalı.
+        private void KillAllStrayEngineProcesses(string logPath, string killallExePath = null)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(killallExePath) && File.Exists(killallExePath))
+                {
+                    foreach (var name in new[] { "winws2", "winws", "bash" })
+                    {
+                        try { ExecuteCommand(killallExePath, $"-q -s TERM {name}"); } catch { }
+                    }
+                }
+
+                var candidates = new List<Process>();
+                foreach (var name in new[] { "bash", "winws", "winws2" })
+                {
+                    foreach (var proc in Process.GetProcessesByName(name))
+                    {
+                        try
+                        {
+                            ExecuteCommand("taskkill", $"/PID {proc.Id}");
+                            candidates.Add(proc);
+                        }
+                        catch { }
+                    }
+                }
+
+                if (candidates.Count == 0) return;
+
+                Thread.Sleep(1500);
+
+                foreach (var proc in candidates)
+                {
+                    try
+                    {
+                        proc.Refresh();
+                        if (!proc.HasExited)
+                        {
+                            proc.Kill();
+                            AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kalıntı temizliği: {proc.ProcessName} process zorla sonlandırıldı. PID: {proc.Id}\n");
+                        }
+                        else
+                        {
+                            AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kalıntı temizliği: {proc.ProcessName} process nazikçe kapandı. PID: {proc.Id}\n");
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] KillAllStrayEngineProcesses hatası: {ex.Message}\n");
+            }
+        }
+
+        // İKİNCİ SAVUNMA KATMANI: yukarıdaki process temizliği bile bazı durumlarda (örn. bir
+        // antivirüs/indeksleyici anlık bir tarama için dosyayı açmışsa, ya da işletim sistemi
+        // handle'ı hemen serbest bırakmıyorsa) yeterli olmayabilir. Bu yüzden Directory.Delete'i
+        // TEK SEFERLİK değil, artan gecikmeli bir YENİDEN DENEME döngüsüyle sarmalıyoruz --
+        // körlemesine "bir kere dene, olmazsa hata fırlat" yerine.
+        private bool DeleteDirectoryWithRetry(string path, string logPath, int maxAttempts = 6)
+        {
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(path, true);
+                    return true;
+                }
+                catch (Exception ex) when (attempt < maxAttempts)
+                {
+                    AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Klasör silme denemesi {attempt}/{maxAttempts} başarısız ({ex.Message}), tekrar denenecek...\n");
+                    Thread.Sleep(500 * attempt);
+                }
+                catch (Exception ex)
+                {
+                    AppendLogSafe(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Klasör silme {maxAttempts} denemeden sonra başarısız: {ex.Message}\n");
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        // Kullanılmayan (servise kurulmayan) bulunmuş stratejileri presets2.txt'ye
+        // "Blockcheck [N]" adıyla ekler ve hazır ayarlar listesini yeniler. Her yeni
+        // Otomatik Kurulum çalıştırmasında önceki "Blockcheck [" ile başlayan satırlar
+        // önce temizlenir -- birikip listeyi kirletmesinler.
+        private void AddZapret2BlockcheckPresets(List<string> strategies)
+        {
+            try
+            {
+                if (strategies == null || strategies.Count == 0) return;
+
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var presetsPath = Path.Combine(localZapret2Path, "zapret-winws2", "presets2.txt");
+                if (!File.Exists(presetsPath)) return;
+
+                var lines = File.ReadAllLines(presetsPath).ToList();
+                lines.RemoveAll(l => l.TrimStart().StartsWith("Blockcheck ["));
+
+                for (int i = 0; i < strategies.Count; i++)
+                {
+                    lines.Add($"Blockcheck [{i + 1}]:{strategies[i]}");
+                }
+
+                File.WriteAllLines(presetsPath, lines);
+
+                Dispatcher.Invoke(() => LoadZapret2Presets());
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"AddZapret2BlockcheckPresets hatası: {ex.Message}");
+            }
+        }
+
+        private async Task ProcessBlockcheckResults2()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2 sonuçları işleniyor...\n");
+                
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var logPath = Path.Combine(localZapret2Path, "blockcheck2", "blockcheck.log");
+                var serviceCreatePath = Path.Combine(localZapret2Path, "zapret-winws2", "service_create.cmd");
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası yolu: {logPath}\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create yolu: {serviceCreatePath}\n");
+                
+                if (!File.Exists(logPath))
+                {
+                    var errorMsg = "blockcheck.log dosyası bulunamadı.";
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                    throw new Exception(errorMsg);
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Log dosyası okunuyor...\n");
+                var logContent = await ReadBlockcheckLogWithRetryAsync(logPath);
+
+                // NOT: Eskiden blockcheck2.sh'ın KENDİ nihai "!!!!! ...: working strategy found ...
+                // !!!!!" özet satırını arıyorduk -- ama bu satır 12 test dosyasının TAMAMI bitmeden
+                // hiç üretilmiyor, bu da "Hızlı modda bile çok uzun sürüyor" şikayetinin kökeniydi
+                // (erken durdurma imkansızdı, sonuç yoktu). Şimdi HER başarılı deneme satırını
+                // (_zapret2HitRegex) tek tek topluyoruz -- RunZapret2Installation zaten bu sayıya
+                // göre erken durdurmuş olabilir, burada da AYNI hedefe göre işliyoruz.
+                var scanLevel = GetSelectedScanLevel2();
+                var targetCount = GetZapret2ScanTargetCount(scanLevel);
+
+                List<string> ExtractHits(System.Text.RegularExpressions.Regex regex)
+                {
+                    var list = new List<string>();
+                    foreach (System.Text.RegularExpressions.Match m in regex.Matches(logContent))
+                    {
+                        list.Add(m.Groups["args"].Value.Trim());
+                    }
+                    return list;
+                }
+
+                // YENİDEN TASARIM (alimali54/zapret-win-turkey referans alınarak, kullanıcının
+                // kendi testinde "harika çalıştığını" doğruladığı yöntem): o proje SADECE port 443
+                // (HTTPS) için bulunan stratejiyi alıp (bkz. _GetLastStrategyFromText -- açıkça
+                // "--wf-tcp-out=443" arıyor), kurulum sırasında bunu TÜM portlara
+                // (--wf-tcp-out=0-65535 --wf-udp-out=0-65535) uyguluyor. HTTP+HTTPS'i ayrı ayrı
+                // bulup "--new" ile birleştirmeyi denedik ama bu, HTTP'nin tek başına dakikalarca
+                // sürebildiği ağlarda "Hızlı" modu anlamsız kılıyordu (canlı testte doğrulandı).
+                // Tek bir HTTPS stratejisi bulup TÜM portlara uygulamak hem daha basit hem
+                // ıspatlanmış şekilde çalışıyor (TCP-seviyesi teknikler genelde port bağımsız).
+                var httpsHits = ExtractHits(_zapret2HttpsHitRegex);
+
+                if (httpsHits.Count == 0)
+                {
+                    // ÖNEMLİ (alimali54/zapret-win-turkey ile birebir uyumluluk için check_domain_prolog
+                    // vendor satırı geri alındıktan sonra artık gerçekten karşılaşılabilir bir durum):
+                    // eğer HTTPS zaten hiçbir bypass olmadan çalışıyorsa, blockcheck2 hiçbir strateji
+                    // denemeden "working without bypass" yazıp protokolü atlıyor (bkz. check_domain_prolog).
+                    // Bu bir HATA değil -- zapret-win-turkey'in kendi RunBlockcheck2'sindeki
+                    // $isNoBypassNeeded dalıyla birebir aynı: "İnternet hattınızda herhangi bir DPI /
+                    // Sansür kısıtlaması saptanmadı" bilgi mesajı, servis kurulumuna gerek yok.
+                    if (logContent.Contains("working without bypass") || logContent.Contains("not blocked"))
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] İnternet hattınızda herhangi bir DPI / Sansür kısıtlaması saptanmadı. Servis kurulumuna gerek yok.\n");
+                        return;
+                    }
+
+                    var errorMsg = "Log dosyasında çalışan bir HTTPS stratejisi bulunamadı.";
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {errorMsg}\n");
+                    throw new Exception(errorMsg);
+                }
+
+                var usedHttpsCount = Math.Min(targetCount, httpsHits.Count);
+                var selectedHttpsHits = httpsHits.Take(usedHttpsCount).ToList();
+                var rawStrategy = selectedHttpsHits[selectedHttpsHits.Count - 1];
+
+                // PORT GENİŞLETME (zapret-win-turkey'in InstallServiceClean'ı ile birebir aynı
+                // mantık): bulunan strateji sadece port 443 üzerinde test edildi, ama kurarken
+                // TÜM TCP+UDP portlarına uyguluyoruz -- böylece pornhub.com, Discord CDN/güncelleme
+                // uç noktaları gibi port 443 kullanan TÜM diğer trafik de aynı korumayı alıyor,
+                // sadece test edilen tek domain değil.
+                var parameters = System.Text.RegularExpressions.Regex.Replace(
+                    rawStrategy, @"--wf-tcp-out=\d+", "--wf-tcp-out=0-65535") + " --wf-udp-out=0-65535";
+
+                // Standart: kurulan strateji hariç diğerleri hazır ayarlara eklenir.
+                // Tam (force): bulunan ilk 50'nin TAMAMI (kurulan dahil) hazır ayarlara eklenir.
+                var presetHits = scanLevel == "force"
+                    ? selectedHttpsHits
+                    : selectedHttpsHits.Take(selectedHttpsHits.Count - 1).ToList();
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HTTPS: {httpsHits.Count} strateji bulundu, {usedHttpsCount} tanesi kullanılıyor ({scanLevel} modu).\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Ham strateji (port 443): {rawStrategy}\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Genişletilmiş strateji (tüm portlar): {parameters}\n");
+
+                if (presetHits.Count > 0)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {presetHits.Count} strateji 'Blockcheck [N]' olarak hazır ayarlara ekleniyor...\n");
+                    AddZapret2BlockcheckPresets(presetHits);
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Service create.cmd güncelleniyor...\n");
+
+                // Yeni hizmet kurulum yöntemi: service_install_splitwireturkey.cmd
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Yeni hizmet kurulum yöntemi kullanılıyor...\n");
+
+                // NOT: eski zapret'in "--wf-tcp=80,443 --wf-udp=..." önekini artık EKLEMİYORUZ --
+                // blockcheck2'nin bulduğu strateji (--wf-l3=... --wf-tcp-out=... ...) kendi başına
+                // tam bir filtre tanımı, eski sözdizimiyle birleştirilemez.
+                var fullParameters = parameters;
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kullanılacak parametreler: {fullParameters}\n");
+                
+                // Yeni hizmet kurulum dosyasını oluştur
+                var serviceInstallPath = Path.Combine(localZapret2Path, "zapret-winws2", "service_install_splitwireturkey.cmd");
+                await CreateServiceInstallScript2(serviceInstallPath, fullParameters);
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuldu: {serviceInstallPath}\n");
+                
+                // Hizmet kurulum scriptini çalıştır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti çalıştırılıyor...\n");
+                
+                await Task.Run(() =>
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c \"{serviceInstallPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(serviceInstallPath),
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    
+                    using var process = Process.Start(psi);
+                    if (process != null)
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process başlatıldı. PID: {process.Id}\n");
+                        
+                        // Çıktıları oku
+                        var output = process.StandardOutput.ReadToEnd();
+                        var error = process.StandardError.ReadToEnd();
+                        
+                        process.WaitForExit();
+                        
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum process kapandı. Exit Code: {process.ExitCode}\n");
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Output: {output}\n");
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Standard Error: {error}\n");
+                    }
+                });
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla çalıştırıldı.\n");
+                
+                // Hizmet kurulumunu doğrula
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulumu doğrulanıyor...\n");
+                var serviceExists = await VerifyZapret2Service();
+                
+                if (serviceExists)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti başarıyla kuruldu ve çalışıyor.\n");
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2 sonuçları başarıyla işlendi.\n");
+
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_install_success"), 
+                        LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    
+                    // Başarılı kurulum sonrası kaldır butonunu güncelle
+                    CheckZapret2RemoveButtonVisibility();
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UYARI: Zapret2 hizmeti kurulamadı veya çalışmıyor.\n");
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Blockcheck2 sonuçları işlendi ancak hizmet kurulumu başarısız.\n");
+
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_install_partial_success"), 
+                        LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: {ex.Message}\n");
+                throw new Exception($"Blockcheck2 sonuçları işlenirken hata oluştu: {ex.Message}", ex);
+            }
+        }
+
+        private async Task CreateServiceInstallScript2(string scriptPath, string parameters)
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturuluyor...\n");
+
+                // ÖNEMLİ (kullanıcının canlı karşılaştırmasıyla tespit edildi -- bizim "sc query"
+                // ile gördüğü binPath, alimali54/zapret-win-turkey'in kurduğu hizmetinkiyle FARKLI
+                // SIRADA duruyordu: bizde --wf-udp-out, --lua-desync'ten SONRA geliyordu; onlarda
+                // --wf-l3/--wf-tcp-out/--wf-udp-out hep en başta, art arda duruyor). Artık burada,
+                // girdi ne şekilde gelirse gelsin (ham blockcheck çıktısı "--wf-l3=... --wf-tcp-out=443
+                // ..." formatında OLABİLİR, ya da zaten sadece teknik kısmı OLABİLİR), önce olası
+                // --wf-l3=/--wf-tcp-out=/--wf-udp-out= öneklerini ayıklayıp SADECE teknik kısmı
+                // (--payload=..., --lua-desync=..., --in-range=... vb.) çıkarıyoruz, sonra
+                // InstallServiceClean'in $binArgs sırasıyla BİREBİR aynı sırada yeniden kuruyoruz:
+                // --wf-l3=ipv4 --wf-tcp-out=0-65535 --wf-udp-out=0-65535 --hostlist-exclude=...
+                // {teknik kısım} --lua-init=... x3 --hostlist-auto=...
+                var techniqueArgs = System.Text.RegularExpressions.Regex.Replace(
+                    parameters,
+                    @"--wf-l3=\S+\s*|--wf-tcp-out=\S+\s*|--wf-udp-out=\S+\s*",
+                    "").Trim();
+
+                var scriptContent = $@"@echo off
+setlocal enabledelayedexpansion
+
+rem Zapret2 hizmeti kurulum scripti
+rem Bu script SplitWireTurkey tarafından otomatik olarak oluşturulur
+
+set SERVICE_NAME=zapret2
+set EXE_PATH=%~dp0winws.exe
+set DISPLAY_NAME=Zapret2
+rem --lua-init modulleri: zapret2 (gercek bol-van/zapret2 motoru) her --lua-desync=<fonksiyon>
+rem tekniginin GERCEK implementasyonunu bu dosyalardan alir -- bunlar olmadan winws.exe
+rem sessizce hicbir sey yapmadan durur. alimali54/zapret-win-turkey'in InstallServiceClean'i
+rem de ayni ucunu yukluyor (zapret-lib, zapret-antidpi, zapret-auto).
+rem --hostlist-exclude: kullanicinin dislama listesi ile duzenledigi dosya. Dosya her zaman
+rem var (Kullan switch'i kapaliyken icerigi bosaltilir) -- winws.exe degisikligi otomatik
+rem algilayip yeniden yukler, yeniden baslatmaya gerek yok.
+rem --hostlist-auto: alimali54/zapret-win-turkey'in Filtre: Auto secenegiyle ayni --
+rem winws2 KENDISI hangi domain'lerin gercekten engellendigini (basarisiz baglanti/tekrar
+rem gonderim sayisina bakarak) tespit edip bu dosyaya otomatik ekliyor, zamanla sadece
+rem gercekten gerekli domain'lere desync uyguluyor. Dosya yoksa olusturulmali (asagida).
+if not exist ""%~dp0splitwire-autohostlist.txt"" type nul > ""%~dp0splitwire-autohostlist.txt""
+rem ARGS sirasi alimali54/zapret-win-turkey'in InstallServiceClean/$binArgs ile birebir ayni:
+rem wf-l3, wf-tcp-out, wf-udp-out, hostlist-exclude, [teknik argumanlari], lua-init x3, hostlist-auto.
+set ARGS=--wf-l3=ipv4 --wf-tcp-out=0-65535 --wf-udp-out=0-65535 --hostlist-exclude=%~dp0splitwire-exclude.txt {techniqueArgs} --lua-init=@%~dp0lua\zapret-lib.lua --lua-init=@%~dp0lua\zapret-antidpi.lua --lua-init=@%~dp0lua\zapret-auto.lua --hostlist-auto=%~dp0splitwire-autohostlist.txt
+
+rem Mevcut hizmeti durdur ve sil
+echo Mevcut %SERVICE_NAME% hizmeti kontrol ediliyor...
+sc query %SERVICE_NAME% >nul 2>&1
+if %errorlevel% equ 0 (
+    echo %SERVICE_NAME% hizmeti bulundu, durduruluyor...
+    net stop %SERVICE_NAME% >nul 2>&1
+    echo %SERVICE_NAME% hizmeti siliniyor...
+    sc delete %SERVICE_NAME% >nul 2>&1
+    echo %SERVICE_NAME% hizmeti silindi.
+) else (
+    echo %SERVICE_NAME% hizmeti bulunamadı.
+)
+
+rem ONEMLI (alimali54/zapret-win-turkey'in RemoveService() fonksiyonuyla birebir ayni --
+rem eksikligi gercek Discord/pornhub HTTPS erisimini engelleyen kok neden olarak tespit edildi):
+rem sadece zapret2 SCM kaydini silmek yetmiyor, WinDivert cekirdek surucusunun KENDISI de
+rem her kurulumda sifirlanmali. Eski bir kurulumdan (ya da bu oturumdaki onceki Zapret/Zapret2/
+rem GoodbyeDPI denemelerinden) kalan STALE bir WinDivert/WinDivert14/monkey surucu kaydi,
+rem yeni winws.exe surecinin dogru filtreyi gercekten devreye alamamasina yol acabiliyor --
+rem servis RUNNING, winws.exe surec olarak calisiyor ve WinDivert de RUNNING gorunse bile,
+rem gercek trafik hala eski/bozuk bir surucu durumuyla RST edilebiliyor. Bu yuzden zapret-win-
+rem turkey'in yaptigi gibi HER kurulumdan once bu uc surucu adini da durdurup siliyoruz.
+echo WinDivert ailesi surucu kayitlari temizleniyor (stale surucu onlemi)...
+sc stop WinDivert >nul 2>&1
+sc delete WinDivert >nul 2>&1
+sc stop WinDivert14 >nul 2>&1
+sc delete WinDivert14 >nul 2>&1
+sc stop monkey >nul 2>&1
+sc delete monkey >nul 2>&1
+
+rem Yeni hizmeti oluştur
+echo Yeni %SERVICE_NAME% hizmeti oluşturuluyor...
+sc create %SERVICE_NAME% binPath= ""%EXE_PATH% %ARGS%"" DisplayName= ""%DISPLAY_NAME%"" start= auto
+
+if %errorlevel% equ 0 (
+    echo %SERVICE_NAME% hizmeti başarıyla oluşturuldu.
+    
+    rem Hizmet açıklamasını ayarla
+    echo Hizmet açıklaması ayarlanıyor...
+    sc description %SERVICE_NAME% ""zapret2 DPI bypass software""
+    
+    rem Hizmeti başlat
+    echo %SERVICE_NAME% hizmeti başlatılıyor...
+    sc start %SERVICE_NAME%
+    
+    if %errorlevel% equ 0 (
+        echo %SERVICE_NAME% hizmeti başarıyla başlatıldı.
+        echo Hizmet kurulumu tamamlandı.
+    ) else (
+        echo %SERVICE_NAME% hizmeti başlatılamadı. Hata kodu: %errorlevel%
+    )
+) else (
+    echo %SERVICE_NAME% hizmeti oluşturulamadı. Hata kodu: %errorlevel%
+)
+
+echo.
+echo Hizmet kurulum işlemi tamamlandı.
+";
+                
+                await File.WriteAllTextAsync(scriptPath, scriptContent);
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti başarıyla oluşturuldu.\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Script içeriği:\n{scriptContent}\n");
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum scripti oluşturma hatası: {ex.Message}\n");
+                throw new Exception($"Hizmet kurulum scripti oluşturma hatası: {ex.Message}", ex);
+            }
+        }
+
+        private async Task<bool> VerifyZapret2Service()
+        {
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti kontrol ediliyor...\n");
+                
+                // sc query komutu ile hizmet durumunu kontrol et
+                var result = await Task.Run(() =>
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "sc.exe",
+                        Arguments = "query zapret2",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    
+                    using var process = Process.Start(psi);
+                    if (process != null)
+                    {
+                        var output = process.StandardOutput.ReadToEnd();
+                        var error = process.StandardError.ReadToEnd();
+                        process.WaitForExit();
+                        
+                        return new { Output = output, Error = error, ExitCode = process.ExitCode };
+                    }
+                    return new { Output = "", Error = "", ExitCode = -1 };
+                });
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query sonucu - Exit Code: {result.ExitCode}\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query çıktısı: {result.Output}\n");
+                if (!string.IsNullOrEmpty(result.Error))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SC query hatası: {result.Error}\n");
+                }
+                
+                // Hizmet bulundu mu kontrol et
+                if (result.ExitCode == 0 && result.Output.Contains("SERVICE_NAME: zapret2"))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti bulundu.\n");
+                    
+                    // Hizmet durumunu kontrol et
+                    if (result.Output.Contains("RUNNING") || result.Output.Contains("ÇALIŞIYOR"))
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti çalışıyor.\n");
+                        return true;
+                    }
+                    else
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti bulundu ancak çalışmıyor.\n");
+                        
+                        // Hizmeti başlatmayı dene
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatılmaya çalışılıyor...\n");
+                        var startResult = await Task.Run(() =>
+                        {
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = "sc.exe",
+                                Arguments = "start zapret2",
+                                UseShellExecute = false,
+                                CreateNoWindow = true,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true
+                            };
+                            
+                            using var process = Process.Start(psi);
+                            if (process != null)
+                            {
+                                var output = process.StandardOutput.ReadToEnd();
+                                var error = process.StandardError.ReadToEnd();
+                                process.WaitForExit();
+                                
+                                return new { Output = output, Error = error, ExitCode = process.ExitCode };
+                            }
+                            return new { Output = "", Error = "", ExitCode = -1 };
+                        });
+                        
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma sonucu - Exit Code: {startResult.ExitCode}\n");
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet başlatma çıktısı: {startResult.Output}\n");
+                        
+                        if (startResult.ExitCode == 0)
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti başarıyla başlatıldı.\n");
+                            return true;
+                        }
+                        else
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti başlatılamadı.\n");
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti bulunamadı.\n");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet doğrulama hatası: {ex.Message}\n");
+                return false;
+            }
+        }
+
+        private async void BtnZapret2CustomService_Click(object sender, RoutedEventArgs e)
+        {
+            var message = LanguageManager.GetText("messages", "confirm_zapret2_preset_service");
+            
+            // Kaspersky AV tespit edildiyse uyarı ekle
+            var avpProcesses = Process.GetProcessesByName("avp");
+            var avpuiProcesses = Process.GetProcessesByName("avpui");
+            if (avpProcesses.Length > 0 || avpuiProcesses.Length > 0)
+            {
+                message = LanguageManager.GetText("messages", "confirm_zapret2_preset_service_kaspersky");
+            }
+
+            var result = System.Windows.MessageBox.Show(
+                message,
+                LanguageManager.GetText("messages", "zapret2_preset_service_title"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+                return;
+
+            ShowLoading(true);
+            
+            try
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 özel hizmet kurulumu başlatılıyor...\n");
+                
+                // Önce hizmetleri durdur ve kaldır
+                await PerformServiceCleanupForZapret2();
+                
+                // Dosyalar yoksa kopyala
+                if (!CheckZapret2FilesExist())
+                {
+                    // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
+                    if (AreCriticalWinDivertFilesMissing())
+                    {
+                        System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "windivert_files_missing_kaspersky2"), 
+                            LanguageManager.GetText("messages", "install_error_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                    
+                    if (!await EnsureZapret2FilesExist())
+                    {
+                        return;
+                    }
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 özel hizmet ön hazırlık işlemleri tamamlandı.\n");
+
+                // Textbox'taki parametreleri al (blockcheck2 SUMMARY'den değil)
+                var parameters = txtZapret2Params.Text.Trim();
+                
+                if (string.IsNullOrEmpty(parameters))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: Textbox'ta parametre bulunamadı!\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_parameters_required"), 
+                        LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Kullanılacak parametreler: {parameters}\n");
+
+                // DNS ayarları yap (sadece switch aktifse)
+                var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
+                if (enableAutoDNS)
+                {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
+                await SetModernDNSSettingsAsync();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                }
+
+                // Zapret2 hizmetini kur (blockcheck2 olmadan, direkt parametrelerle)
+                var success = await InstallZapret2ServiceDirectly(parameters, zapret2LogPath);
+                
+                if (success)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 özel hizmet kurulumu başarıyla tamamlandı.\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_custom_service_success"), 
+                        LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    
+                    // Başarılı kurulum sonrası kaldır butonunu güncelle
+                    CheckZapret2RemoveButtonVisibility();
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 özel hizmet kurulumu başarısız!\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_custom_service_failed"), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 özel hizmet işlemi hatası: {ex.Message}\n");
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_custom_service_error").Replace("{0}", ex.Message), 
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                ShowLoading(false);
+                
+                // Hizmet durumlarını güncelle
+                CheckAllServices();
+            }
+        }
+
+        private async Task<bool> InstallZapret2ServiceDirectly(string parameters, string zapret2LogPath)
+        {
+            try
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti direkt kurulumu başlatılıyor...\n");
+
+                // Mevcut "zapret2" hizmetini durdur ve kaldır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Mevcut zapret2 hizmeti kontrol ediliyor...\n");
+                
+                try
+                {
+                    var stopResult = await RunCommandAsync("sc", "stop zapret2");
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc stop zapret2 sonucu: {stopResult}\n");
+                }
+                catch (Exception ex)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret2 hizmeti durdurma hatası (muhtemelen hizmet yok): {ex.Message}\n");
+                }
+
+                try
+                {
+                    var deleteResult = await RunCommandAsync("sc", "delete zapret2");
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] sc delete zapret2 sonucu: {deleteResult}\n");
+                }
+                catch (Exception ex)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] zapret2 hizmeti silme hatası (muhtemelen hizmet yok): {ex.Message}\n");
+                }
+
+                // Hizmet silme işleminin tamamlanmasını bekle
+                await Task.Delay(2000);
+
+                // Yeni hizmet kurulum script'ini oluştur
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var serviceInstallScriptPath = Path.Combine(localZapret2Path, "zapret-winws2", "service_install_splitwireturkey.cmd");
+
+                // NOT: eski zapret'in "--wf-tcp=80,443 --wf-udp=..." önekini artık EKLEMİYORUZ --
+                // Zapret2 hazır ayarları/manuel parametreler (--wf-l3=... --wf-tcp-out=... ...)
+                // kendi başına tam bir filtre tanımı, eski sözdizimiyle birleştirilemez.
+                var combinedParameters = parameters;
+                
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Birleştirilmiş parametreler: {combinedParameters}\n");
+
+                // Hizmet kurulum script'ini oluştur
+                await CreateServiceInstallScript2(serviceInstallScriptPath, combinedParameters);
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i oluşturuldu: {serviceInstallScriptPath}\n");
+
+                // Script'i çalıştır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i çalıştırılıyor...\n");
+                
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c \"\"{serviceInstallScriptPath}\"\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = Path.GetDirectoryName(serviceInstallScriptPath)
+                };
+
+                using var process = Process.Start(psi);
+                if (process != null)
+                {
+                    var output = await process.StandardOutput.ReadToEndAsync();
+                    var error = await process.StandardError.ReadToEndAsync();
+                    
+                    await process.WaitForExitAsync();
+                    
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i tamamlandı. Exit Code: {process.ExitCode}\n");
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Çıktı: {output}\n");
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hata: {error}\n");
+                    }
+
+                    if (process.ExitCode == 0)
+                    {
+                        // NOT: script kendi icinde "sc create" + "sc start %SERVICE_NAME%" yapiyor --
+                        // burada AYRICA "sc start zapret2" cagirmak sadece "1056: hizmet halihazirda
+                        // calisiyor" seklinde yaniltici bir log satiri ekliyordu (canli testte tespit
+                        // edildi, bkz. RunZapretInstallation'daki ayni duzeltme). Kaldirildi.
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet script icinde baslatildi, dogrulaniyor...\n");
+
+                        // Hizmetin çalışıp çalışmadığını kontrol et
+                        await Task.Delay(3000);
+                        var verifyResult = await VerifyZapret2Service();
+                        
+                        if (verifyResult)
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti başarıyla kuruldu ve çalışıyor.\n");
+                            return true;
+                        }
+                        else
+                        {
+                            AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmeti kuruldu ancak çalışmıyor.\n");
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başarısız oldu.\n");
+                        return false;
+                    }
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kurulum script'i başlatılamadı.\n");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] InstallZapret2ServiceDirectly hatası: {ex.Message}\n");
+                return false;
+            }
+        }
+
+        private async void BtnZapret2CustomBatch_Click(object sender, RoutedEventArgs e)
+        {
+            // Dosyalar yoksa kopyala
+            if (!CheckZapret2FilesExist())
+            {
+                // Kritik WinDivert dosyaları eksikse kopyalama işlemini başlatma
+                if (AreCriticalWinDivertFilesMissing())
+                {
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "windivert_files_missing_operation_kaspersky2"), 
+                        LanguageManager.GetText("messages", "operation_error_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                
+                if (!await EnsureZapret2FilesExist())
+                {
+                    return;
+                }
+            }
+
+            // Loading ekranını göster
+            ShowLoading(true);
+
+            try
+            {
+                // Textbox'taki parametreleri al
+                var parameters = txtZapret2Params.Text.Trim();
+                
+                if (string.IsNullOrEmpty(parameters))
+                {
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_parameters_required_simple"), 
+                        LanguageManager.GetText("messages", "warning_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 Özel Tek Seferlik başlatılıyor...\n");
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Parametreler: {parameters}\n");
+
+                // DNS ayarları yap (sadece switch aktifse)
+                var enableAutoDNS = Dispatcher.Invoke(() => chkAutoDNSChange.IsChecked == true);
+                if (enableAutoDNS)
+                {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları yapılıyor...\n");
+                await SetModernDNSSettingsAsync();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları tamamlandı.\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] DNS ayarları atlandı (switch kapalı).\n");
+                }
+
+                // onetime_batch.cmd dosyasının yolunu al
+                var localZapret2Path = GetLocalAppDataZapret2Path();
+                var onetimeBatchPath = Path.Combine(localZapret2Path, "zapret-winws2", "onetime_batch.cmd");
+
+                if (!File.Exists(onetimeBatchPath))
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd dosyası bulunamadı: {onetimeBatchPath}\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "onetime_batch_not_found"), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd çalıştırılıyor: {onetimeBatchPath}\n");
+
+                // CMD dosyasını parametrelerle çalıştır
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c \"\"{onetimeBatchPath}\" {parameters}\"",
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(onetimeBatchPath)
+                };
+
+                using var process = Process.Start(psi);
+                if (process != null)
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd başlatıldı. Process ID: {process.Id}\n");
+                    ShowLoading(false);
+                    // Process'in tamamlanmasını bekle
+                    await Task.Run(() => process.WaitForExit());
+                    
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] onetime_batch.cmd tamamlandı. Exit Code: {process.ExitCode}\n");
+                }
+                else
+                {
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] HATA: onetime_batch.cmd başlatılamadı!\n");
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "onetime_batch_start_failed"), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                var zapret2LogPath = GetZapret2LogPath();
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 Özel Tek Seferlik hatası: {ex.Message}\n");
+                
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_custom_onetime_error").Replace("{0}", ex.Message),
+                    LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                // Loading ekranını gizle
+                ShowLoading(false);
+                CheckAllServices();
+            }
+        }
+
+        private async void BtnRemoveZapret2_Click(object sender, RoutedEventArgs e)
+        {
+            var result = System.Windows.MessageBox.Show(
+                LanguageManager.GetText("messages", "confirm_remove_zapret2"),
+                LanguageManager.GetText("messages", "remove_zapret2_title"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                ShowLoading(true);
+                
+                try
+                {
+                    var zapret2LogPath = GetZapret2LogPath();
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kaldırma işlemi başlatılıyor...\n");
+
+                    await RemoveZapret2Services(zapret2LogPath);
+
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kaldırma işlemi tamamlandı.\n");
+                    
+                    await ForceRefreshAllServicesAsync();
+                    btnRemoveZapret2.Visibility = Visibility.Collapsed;
+                    
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_removed_success"), 
+                        LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    var zapret2LogPath = GetZapret2LogPath();
+                    AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 kaldırma hatası: {ex.Message}\n");
+                    
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "zapret2_remove_error").Replace("{0}", ex.Message), 
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    ShowLoading(false);
+                }
+            }
+        }
+
+        private async Task RemoveZapret2Services(string zapret2LogPath)
+        {
+            try
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmetleri kaldırılıyor...\n");
+
+                // 1. Zapret2 hizmetini durdur ve kaldır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 1. Zapret2 hizmeti durduruluyor...\n");
+                await StopAndRemoveService("zapret2", zapret2LogPath);
+
+                // 2. winws1 hizmetini durdur ve kaldır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 2. winws1 hizmeti durduruluyor...\n");
+                await StopAndRemoveService("winws1", zapret2LogPath);
+
+                // 3. winws2 hizmetini durdur ve kaldır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 3. winws2 hizmeti durduruluyor...\n");
+                await StopAndRemoveService("winws2", zapret2LogPath);
+
+                // 4. winws.exe işlemlerini durdur
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 4. winws.exe işlemleri durduruluyor...\n");
+                await StopWinwsProcesses(zapret2LogPath);
+
+                // 5. WinDivert hizmetini durdur ve kaldır
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 5. WinDivert hizmeti durduruluyor...\n");
+                await StopAndRemoveService("WinDivert", zapret2LogPath);
+
+                // Hizmet kaldırma işlemlerinin tamamlanmasını bekle
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Hizmet kaldırma işlemlerinin tamamlanması bekleniyor...\n");
+                await Task.Delay(3000);
+
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Zapret2 hizmetleri başarıyla kaldırıldı.\n");
+            }
+            catch (Exception ex)
+            {
+                AppendLogSafe(zapret2LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RemoveZapret2Services hatası: {ex.Message}\n");
+                throw;
+            }
+        }
+
+        private void CheckZapret2RemoveButtonVisibility()
+        {
+            // Zapret2 hizmeti yüklü değilse kaldır butonunu gizle
+            if (btnRemoveZapret2 != null)
+            {
+                btnRemoveZapret2.Visibility = IsServiceInstalled("zapret2") ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        private void CheckZapret2RemoveButtonVisibilityFromCache()
+        {
+            if (btnRemoveZapret2 != null)
+            {
+                if (_serviceStatusCache.TryGetValue("zapret2", out bool isInstalled))
+                {
+                    btnRemoveZapret2.Visibility = isInstalled ? Visibility.Visible : Visibility.Collapsed;
+                }
+                else
+                {
+                    // Cache'de yoksa asenkron kontrol yap
+                    _ = Task.Run(async () => await CheckAllServicesAsync());
+                }
+            }
+        }
+
+        private void UpdateZapret2WindowSize()
+        {
+            var animationDuration = TimeSpan.FromMilliseconds(400);
+            var totalHeight = _zapret2ManualParamsActive ? _zapret2ManualParamsHeight : _zapret2BaseHeight;
+
+            if (_zapret2UseHostlistActive)
+                totalHeight += _zapret2UseHostlistHeight;
+
+            if (_zapret2EditHostlistActive)
+                totalHeight += _zapret2EditHostlistHeight;
+
+            // Pencere boyutunu animasyonlu olarak güncelle
+            AnimateWindowHeight(totalHeight, animationDuration);
+        }
+
+        #endregion
+
         // GoodbyeDPI pencere boyutunu merkezi olarak güncelleyen metod
         private void UpdateGoodbyeDPIWindowSize()
         {
@@ -11141,8 +14775,8 @@ echo Hizmet kurulum işlemi tamamlandı.
         {
             try
             {
-                bool isZapretOrGoodbyeDPITab = (TabControl.SelectedIndex == 2 || TabControl.SelectedIndex == 3); // Zapret = 2, GoodbyeDPI = 3
-                
+                bool isZapretOrGoodbyeDPITab = (TabControl.SelectedIndex == 2 || TabControl.SelectedIndex == 3 || TabControl.SelectedIndex == 4); // Zapret = 2, Zapret2 = 3, GoodbyeDPI = 4
+
                 if (!isZapretOrGoodbyeDPITab)
                 {
                     // Diğer sekmelerde overlay'leri gizle
@@ -11157,10 +14791,47 @@ echo Hizmet kurulum işlemi tamamlandı.
                     UpdateOverlayVisibility();
                     Debug.WriteLine("Overlay görünürlüğü güncellendi - Zapret/GoodbyeDPI sekmesi aktif");
                 }
+
+                UpdateHelpButtonVisibilityForCurrentTab();
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Sekme bazlı overlay güncellemesi sırasında hata: {ex.Message}");
+            }
+        }
+
+        // Yardım butonları artık her sekmenin kendi (kırpılabilen) Grid'i içinde değil,
+        // pencerenin kök Grid'ine sabitli (bkz. XAML'daki "Sekme Yardım Butonları" bloğu) --
+        // bu yüzden hangi sekme aktifse SADECE o sekmenin butonu görünür yapılıyor, diğerleri
+        // gizleniyor.
+        private void UpdateHelpButtonVisibilityForCurrentTab()
+        {
+            try
+            {
+                var allHelpButtons = new[] { btnHelpMainPage, btnHelpByeDPI, btnHelpZapret, btnHelpZapret2, btnHelpGoodbyeDPI, btnHelpDiscord, btnHelpAdvanced };
+                var activeButton = TabControl.SelectedIndex switch
+                {
+                    0 => btnHelpMainPage,
+                    1 => btnHelpByeDPI,
+                    2 => btnHelpZapret,
+                    3 => btnHelpZapret2,
+                    4 => btnHelpGoodbyeDPI,
+                    5 => btnHelpDiscord,
+                    6 => btnHelpAdvanced,
+                    _ => btnHelpMainPage
+                };
+
+                foreach (var btn in allHelpButtons)
+                {
+                    if (btn != null)
+                    {
+                        btn.Visibility = (btn == activeButton) ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Yardım butonu görünürlüğü güncellenirken hata: {ex.Message}");
             }
         }
 
@@ -11386,13 +15057,14 @@ echo Hizmet kurulum işlemi tamamlandı.
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "goodbyedpi_single_run_error").Replace("{0}", ex.Message), 
+                System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "goodbyedpi_single_run_error").Replace("{0}", ex.Message),
                     LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
                 // Loading ekranını gizle
                 ShowLoading(false);
+                CheckAllServices();
             }
         }
 
@@ -12220,10 +15892,11 @@ echo Hizmet kurulum işlemi tamamlandı.
                 var btnHelpMainPage = this.FindName("btnHelpMainPage") as System.Windows.Controls.Button;
                 var btnHelpByeDPI = this.FindName("btnHelpByeDPI") as System.Windows.Controls.Button;
                 var btnHelpZapret = this.FindName("btnHelpZapret") as System.Windows.Controls.Button;
+                var btnHelpZapret2 = this.FindName("btnHelpZapret2") as System.Windows.Controls.Button;
                 var btnHelpGoodbyeDPI = this.FindName("btnHelpGoodbyeDPI") as System.Windows.Controls.Button;
                 var btnHelpDiscord = this.FindName("btnHelpDiscord") as System.Windows.Controls.Button;
                 var btnHelpAdvanced = this.FindName("btnHelpAdvanced") as System.Windows.Controls.Button;
-                
+
                 // Stil referansını farklı yollarla deneyelim
                 var darkStyle = System.Windows.Application.Current.Resources["InfoButtonStyleDark"] as Style;
                 if (darkStyle == null)
@@ -12247,12 +15920,17 @@ echo Hizmet kurulum işlemi tamamlandı.
                         btnHelpByeDPI.Style = darkStyle;
                         Debug.WriteLine("btnHelpByeDPI karanlık mod stili uygulandı");
                     }
-                    if (btnHelpZapret != null) 
+                    if (btnHelpZapret != null)
                     {
                         btnHelpZapret.Style = darkStyle;
                         Debug.WriteLine("btnHelpZapret karanlık mod stili uygulandı");
                     }
-                    if (btnHelpGoodbyeDPI != null) 
+                    if (btnHelpZapret2 != null)
+                    {
+                        btnHelpZapret2.Style = darkStyle;
+                        Debug.WriteLine("btnHelpZapret2 karanlık mod stili uygulandı");
+                    }
+                    if (btnHelpGoodbyeDPI != null)
                     {
                         btnHelpGoodbyeDPI.Style = darkStyle;
                         Debug.WriteLine("btnHelpGoodbyeDPI karanlık mod stili uygulandı");
@@ -12282,23 +15960,28 @@ echo Hizmet kurulum işlemi tamamlandı.
                         AnimateBackgroundColor(btnHelpByeDPI, infoButtonColor, animationDuration);
                         AnimateForegroundColor(btnHelpByeDPI, Colors.White, animationDuration);
                     }
-                    if (btnHelpZapret != null) 
+                    if (btnHelpZapret != null)
                     {
                         AnimateBackgroundColor(btnHelpZapret, infoButtonColor, animationDuration);
                         AnimateForegroundColor(btnHelpZapret, Colors.White, animationDuration);
                     }
-                    if (btnHelpGoodbyeDPI != null) 
+                    if (btnHelpZapret2 != null)
+                    {
+                        AnimateBackgroundColor(btnHelpZapret2, infoButtonColor, animationDuration);
+                        AnimateForegroundColor(btnHelpZapret2, Colors.White, animationDuration);
+                    }
+                    if (btnHelpGoodbyeDPI != null)
                     {
                         AnimateBackgroundColor(btnHelpGoodbyeDPI, infoButtonColor, animationDuration);
                         AnimateForegroundColor(btnHelpGoodbyeDPI, Colors.White, animationDuration);
                     }
-                    if (btnHelpAdvanced != null) 
+                    if (btnHelpAdvanced != null)
                     {
                         AnimateBackgroundColor(btnHelpAdvanced, infoButtonColor, animationDuration);
                         AnimateForegroundColor(btnHelpAdvanced, Colors.White, animationDuration);
                     }
                 }
-                
+
                 // Toggle switch stillerini karanlık moda güncelle
                 UpdateToggleSwitchStyles(true);
                 
@@ -12407,10 +16090,11 @@ echo Hizmet kurulum işlemi tamamlandı.
                 var btnHelpMainPage = this.FindName("btnHelpMainPage") as System.Windows.Controls.Button;
                 var btnHelpByeDPI = this.FindName("btnHelpByeDPI") as System.Windows.Controls.Button;
                 var btnHelpZapret = this.FindName("btnHelpZapret") as System.Windows.Controls.Button;
+                var btnHelpZapret2 = this.FindName("btnHelpZapret2") as System.Windows.Controls.Button;
                 var btnHelpGoodbyeDPI = this.FindName("btnHelpGoodbyeDPI") as System.Windows.Controls.Button;
                 var btnHelpDiscord = this.FindName("btnHelpDiscord") as System.Windows.Controls.Button;
                 var btnHelpAdvanced = this.FindName("btnHelpAdvanced") as System.Windows.Controls.Button;
-                
+
                 // Stil referansını farklı yollarla deneyelim
                 var lightStyle = System.Windows.Application.Current.Resources["InfoButtonStyle"] as Style;
                 if (lightStyle == null)
@@ -12434,12 +16118,17 @@ echo Hizmet kurulum işlemi tamamlandı.
                         btnHelpByeDPI.Style = lightStyle;
                         Debug.WriteLine("btnHelpByeDPI aydınlık mod stili uygulandı");
                     }
-                    if (btnHelpZapret != null) 
+                    if (btnHelpZapret != null)
                     {
                         btnHelpZapret.Style = lightStyle;
                         Debug.WriteLine("btnHelpZapret aydınlık mod stili uygulandı");
                     }
-                    if (btnHelpGoodbyeDPI != null) 
+                    if (btnHelpZapret2 != null)
+                    {
+                        btnHelpZapret2.Style = lightStyle;
+                        Debug.WriteLine("btnHelpZapret2 aydınlık mod stili uygulandı");
+                    }
+                    if (btnHelpGoodbyeDPI != null)
                     {
                         btnHelpGoodbyeDPI.Style = lightStyle;
                         Debug.WriteLine("btnHelpGoodbyeDPI aydınlık mod stili uygulandı");
@@ -12469,12 +16158,17 @@ echo Hizmet kurulum işlemi tamamlandı.
                         AnimateBackgroundColor(btnHelpByeDPI, defaultInfoColor, animationDuration);
                         AnimateForegroundColor(btnHelpByeDPI, defaultInfoTextColor, animationDuration);
                     }
-                    if (btnHelpZapret != null) 
+                    if (btnHelpZapret != null)
                     {
                         AnimateBackgroundColor(btnHelpZapret, defaultInfoColor, animationDuration);
                         AnimateForegroundColor(btnHelpZapret, defaultInfoTextColor, animationDuration);
                     }
-                    if (btnHelpGoodbyeDPI != null) 
+                    if (btnHelpZapret2 != null)
+                    {
+                        AnimateBackgroundColor(btnHelpZapret2, defaultInfoColor, animationDuration);
+                        AnimateForegroundColor(btnHelpZapret2, defaultInfoTextColor, animationDuration);
+                    }
+                    if (btnHelpGoodbyeDPI != null)
                     {
                         AnimateBackgroundColor(btnHelpGoodbyeDPI, defaultInfoColor, animationDuration);
                         AnimateForegroundColor(btnHelpGoodbyeDPI, defaultInfoTextColor, animationDuration);
@@ -12714,7 +16408,8 @@ echo Hizmet kurulum işlemi tamamlandı.
                 "chromium.exe",
                 "iexplore.exe",
                 "Maxthon.exe",
-                "librewolf.exe"
+                "librewolf.exe",
+                "electron.exe"
             };
             
             return string.Join(" ", browsers);
@@ -12776,19 +16471,24 @@ echo Hizmet kurulum işlemi tamamlandı.
                         "chkWireSockRepeater", // Added for WireSock repeater switch
                         "chkAutoDNSChange", // Added for auto DNS change switch
                         "chkManualParams",
+                        "chkManualParams2",
                         "chkGoodbyeDPIManualParams",
                         "chkGoodbyeDPIUseBlacklist",
                         "chkGoodbyeDPIEditBlacklist",
                         "chkByeDPIBrowserTunneling", // Added for dark mode support
                         "chkDiscordUninstallStandard", // Added for Onarım sekmesi
-                        "chkWebCordShortcut" // Added for WebCord shortcut switch
+                        "chkDnscryptProxyEveryInstall",
+                        "chkZapretUseHostlist",
+                        "chkZapretEditHostlist",
+                        "chkZapret2UseHostlist",
+                        "chkZapret2EditHostlist"
                     };
                     
                     // Discord durum göstergelerini de güncelle
                     // NOT: Daire renkleri tema değişikliklerinde korunmalı, sadece yeşil olanlar güncellenmeli
                     var discordStatus = this.FindName("discordStatus") as System.Windows.Shapes.Ellipse;
                     var discordPTBStatus = this.FindName("discordPTBStatus") as System.Windows.Shapes.Ellipse;
-                    var webCordStatus = this.FindName("webCordStatus") as System.Windows.Shapes.Ellipse;
+                    var splitCordStatus = this.FindName("splitCordStatus") as System.Windows.Shapes.Ellipse;
                     
                     if (discordStatus != null)
                     {
@@ -13180,16 +16880,23 @@ echo Hizmet kurulum işlemi tamamlandı.
                     File.AppendAllText(logPath, "1. Eski yöntemle DNS ve DoH geri alma tamamlandı.\n");
                 }
 
-                // 2. Tüm hizmetleri durdur ve kaldır
-                File.AppendAllText(logPath, "2. Tüm hizmetler kaldırılıyor...\n");
+                // 2. WinDivert kilitlerini temizle ve tüm hizmetleri durdur ve kaldır
+                File.AppendAllText(logPath, "2. WinDivert işlemleri sonlandırılıyor ve tüm hizmetler kaldırılıyor...\n");
+                KillWinDivertProcesses();
+                await Task.Delay(500);
+
                 var services = new[] { 
                     "GoodbyeDPI", 
                     "zapret", 
-                    "byedpi", 
+                    "zapret2",
                     "winws1", 
                     "winws2", 
+                    "byedpi", 
                     "wiresock-client-service", 
+                    "WireSockAppService",
+                    "WireSockConnectService",
                     "ProxiFyreService", 
+                    "dnscrypt-proxy",
                     "WinDivert" 
                 };
                 
@@ -13220,19 +16927,19 @@ echo Hizmet kurulum işlemi tamamlandı.
                 // 4. WireSock'un her iki sürümünü de sessiz kaldır
                 File.AppendAllText(logPath, "4. WireSock'un her iki sürümü sessiz kaldırılıyor...\n");
                 
-                // 4.1. WireSock 2.4.23.1 sürümünü sessiz kaldır (Standart Kurulum)
+                // 4.1. WireSock 3.4.8.1 sürümünü sessiz kaldır (Standart Kurulum)
                 try
                 {
-                    var wiresockUninstallPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-secure-connect-x64-2.4.23.1.exe");
+                    var wiresockUninstallPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "wiresock-secure-connect-x64-3.4.8.1.exe");
                     if (File.Exists(wiresockUninstallPath))
                     {
-                        File.AppendAllText(logPath, "4.1. WireSock 2.4.23.1 sürümü kaldırılıyor...\n");
+                        File.AppendAllText(logPath, "4.1. WireSock 3.4.8.1 sürümü kaldırılıyor...\n");
                         var uninstallProcess = new Process
                         {
                             StartInfo = new ProcessStartInfo
                             {
                                 FileName = wiresockUninstallPath,
-                                Arguments = "/uninstall /S",
+                                Arguments = "/uninstall /S /norestart",
                                 UseShellExecute = false,
                                 CreateNoWindow = true,
                                 RedirectStandardOutput = true,
@@ -13243,16 +16950,16 @@ echo Hizmet kurulum işlemi tamamlandı.
 
                         uninstallProcess.Start();
                         await uninstallProcess.WaitForExitAsync();
-                        File.AppendAllText(logPath, $"4.1. WireSock 2.4.23.1 kaldırma tamamlandı. Exit Code: {uninstallProcess.ExitCode}\n");
+                        File.AppendAllText(logPath, $"4.1. WireSock 3.4.8.1 kaldırma tamamlandı. Exit Code: {uninstallProcess.ExitCode}\n");
                     }
                     else
                     {
-                        File.AppendAllText(logPath, "4.1. WireSock 2.4.23.1 kaldırma dosyası bulunamadı.\n");
+                        File.AppendAllText(logPath, "4.1. WireSock 3.4.8.1 kaldırma dosyası bulunamadı.\n");
                     }
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(logPath, $"4.1. WireSock 2.4.23.1 kaldırma hatası: {ex.Message}\n");
+                    File.AppendAllText(logPath, $"4.1. WireSock 3.4.8.1 kaldırma hatası: {ex.Message}\n");
                     // Hata olsa bile devam et
                 }
 
@@ -13268,7 +16975,7 @@ echo Hizmet kurulum işlemi tamamlandı.
                             StartInfo = new ProcessStartInfo
                             {
                                 FileName = "msiexec",
-                                Arguments = $"/x \"{wiresockLegacyUninstallPath}\" /qn",
+                                Arguments = $"/x \"{wiresockLegacyUninstallPath}\" /qn REBOOT=ReallySuppress",
                                 UseShellExecute = false,
                                 CreateNoWindow = true,
                                 RedirectStandardOutput = true,
@@ -13292,20 +16999,16 @@ echo Hizmet kurulum işlemi tamamlandı.
                     // Hata olsa bile devam et
                 }
 
-                // 4.3. WebCord süreçlerini sonlandır ve masaüstü kısayolunu kaldır
+                // 4.3. SplitCord-Turkey süreçlerini sonlandır
                 try
                 {
-                    File.AppendAllText(logPath, "4.3. WebCord süreçleri sonlandırılıyor...\n");
-                    await CloseWebCordProcessesAsync();
-                    File.AppendAllText(logPath, "4.3. WebCord süreçleri sonlandırıldı.\n");
-                    
-                    File.AppendAllText(logPath, "4.4. WebCord masaüstü kısayolu kaldırılıyor...\n");
-                    RemoveWebCordDesktopShortcuts();
-                    File.AppendAllText(logPath, "4.4. WebCord masaüstü kısayolu kaldırıldı.\n");
+                    File.AppendAllText(logPath, "4.3. SplitCord-Turkey süreçleri sonlandırılıyor...\n");
+                    await CloseSplitCordProcessesAsync();
+                    File.AppendAllText(logPath, "4.3. SplitCord-Turkey süreçleri sonlandırıldı.\n");
                 }
                 catch (Exception ex)
                 {
-                    File.AppendAllText(logPath, $"4.3-4.4. WebCord temizleme hatası: {ex.Message}\n");
+                    File.AppendAllText(logPath, $"4.3. SplitCord-Turkey temizleme hatası: {ex.Message}\n");
                     // Hata olsa bile devam et
                 }
 
@@ -13580,8 +17283,8 @@ echo Hizmet kurulum işlemi tamamlandı.
                     File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Discord PTB durumu: Yüklü değil - Yükle butonu aktif\n");
                 }
 
-                // WebCord durumu kontrolü
-                CheckWebCordStatus();
+                // SplitCord durumu kontrolü
+                CheckSplitCordStatus();
 
                 // Debug bilgileri
                 Debug.WriteLine($"Discord durum kontrolü:");
@@ -13623,167 +17326,164 @@ echo Hizmet kurulum işlemi tamamlandı.
         }
 
         /// <summary>
-        /// WebCord Yükle butonu tıklama olayı
+        /// SplitCord-Turkey Yükle butonu tıklama olayı
         /// </summary>
-        private async void BtnWebCordInstall_Click(object sender, RoutedEventArgs e)
+        private async void BtnSplitCordInstall_Click(object sender, RoutedEventArgs e)
         {
             try
             {
                 // Hizmet kontrolü yap
                 bool anyServiceInstalled = IsAnyServiceInstalled();
-                
+
                 // Onay mesajı oluştur
-                string messageText = LanguageManager.GetText("messages", "confirm_webcord_install");
-                
-                // Kısayol switch'i aktifse kısayol satırını ekle
-                if (chkWebCordShortcut.IsChecked == true)
+                string messageText = LanguageManager.GetText("messages", "confirm_splitcord_install");
+
+                // SplitCord-Turkey kendi aşım özelliklerini içerdiğinden, aktif hizmet varsa kaldırılacağını belirt
+                if (anyServiceInstalled)
                 {
-                    messageText += LanguageManager.GetText("messages", "confirm_webcord_install_shortcut");
+                    messageText += LanguageManager.GetText("messages", "confirm_splitcord_install_remove_services");
                 }
-                
-                // Hizmet yoksa ByeDPI satırını ekle
-                if (!anyServiceInstalled)
-                {
-                    messageText += LanguageManager.GetText("messages", "confirm_webcord_install_byedpi");
-                }
-                
+
                 var result = System.Windows.MessageBox.Show(
                     messageText,
-                    LanguageManager.GetText("messages", "webcord_install_title"), MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    LanguageManager.GetText("messages", "splitcord_install_title"), MessageBoxButton.YesNo, MessageBoxImage.Question);
 
-                if (result == MessageBoxResult.Yes)
+                if (result != MessageBoxResult.Yes)
                 {
-                    ShowLoading(true);
+                    return;
+                }
 
-                    // 1. WebCord kaynak klasörü ve exe kontrolü
-                    var sourcePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "res", "webcord");
-                    var webCordExePath = Path.Combine(sourcePath, "webcord.exe");
-                    
-                    // WebCord.exe yoksa GitHub'dan indir ve çıkar
-                    if (!File.Exists(webCordExePath))
+                ShowLoading(true);
+
+                // 1. GitHub'dan en son SplitCord-Turkey Setup dosyasının adresini al
+                string downloadUrl;
+                try
+                {
+                    using (var httpClient = CreateHttpClientWithAdvancedSettings())
                     {
-                        try
+                        httpClient.DefaultRequestHeaders.Add("User-Agent", "SplitWire-Turkey");
+                        var releasesJson = await httpClient.GetStringAsync("https://api.github.com/repos/cagritaskn/SplitCord-Turkey/releases/latest");
+
+                        var assetMatch = System.Text.RegularExpressions.Regex.Match(releasesJson,
+                            @"""browser_download_url"":\s*""([^""]*Setup[^""]*\.exe)""",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                        if (!assetMatch.Success)
                         {
-                            // Kaynak klasörünü oluştur (yoksa)
-                            if (!Directory.Exists(sourcePath))
-                            {
-                                Directory.CreateDirectory(sourcePath);
-                            }
-                            
-                            // GitHub'dan zip dosyasını indir
-                            var downloadUrl = "https://github.com/SpacingBat3/WebCord/releases/download/v4.12.1/WebCord-win32-x64-4.12.1.zip";
-                            var zipPath = Path.Combine(sourcePath, "WebCord-win32-x64-4.12.1.zip");
-                            
-                            using (var httpClient = CreateHttpClientWithAdvancedSettings())
-                            {
-                                httpClient.Timeout = TimeSpan.FromMinutes(10); // İndirme için 10 dakikalık timeout
-                                
-                                var response = await httpClient.GetAsync(downloadUrl);
-                                response.EnsureSuccessStatusCode();
-                                
-                                using (var fileStream = File.Create(zipPath))
-                                {
-                                    await response.Content.CopyToAsync(fileStream);
-                                }
-                            }
-                            
-                            // Zip dosyasını çıkar
-                            ZipFile.ExtractToDirectory(zipPath, sourcePath, true);
-                            
-                            // İndirilen zip dosyasını sil
-                            if (File.Exists(zipPath))
-                            {
-                                File.Delete(zipPath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            string errorMessage = ex.Message;
-                            
-                            // Timeout hatası kontrolü
-                            if (ex is TaskCanceledException || ex.InnerException is TaskCanceledException || 
-                                errorMessage.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
-                                errorMessage.Contains("timed out", StringComparison.OrdinalIgnoreCase))
-                            {
-                                errorMessage = "WebCord indirme işlemi 10 dakika içinde tamamlanamadı. Lütfen internet bağlantınızı kontrol edip tekrar deneyin.";
-                            }
-                            
                             System.Windows.MessageBox.Show(
-                                $"WebCord indirme hatası: {errorMessage}",
+                                LanguageManager.GetText("messages", "splitcord_release_not_found"),
                                 LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
                             ShowLoading(false);
                             return;
                         }
-                    }
-                    
-                    // 2. WebCord klasörünü AppData'ya kopyala
-                    var targetPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SplitWire-Turkey", "WebCord");
-                    
-                    if (Directory.Exists(sourcePath))
-                    {
-                        // Hedef klasörü oluştur
-                        if (!Directory.Exists(targetPath))
-                        {
-                            Directory.CreateDirectory(targetPath);
-                        }
-                        
-                        // Klasör içeriğini kopyala
-                        CopyDirectory(sourcePath, targetPath, true);
-                    }
-                    else
-                    {
-                        System.Windows.MessageBox.Show(
-                            "WebCord kaynak klasörü bulunamadı: " + sourcePath,
-                            LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
-                        ShowLoading(false);
-                        return;
-                    }
 
-                    // 3. Masaüstü kısayolu oluştur (eğer switch aktif ise)
-                    if (chkWebCordShortcut.IsChecked == true)
+                        downloadUrl = assetMatch.Groups[1].Value;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.MessageBox.Show(
+                        string.Format(LanguageManager.GetText("messages", "splitcord_release_check_error"), ex.Message),
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    ShowLoading(false);
+                    return;
+                }
+
+                // 2. Setup dosyasını indir
+                var setupPath = Path.Combine(Path.GetTempPath(), "SplitCord-Turkey-Setup.exe");
+                try
+                {
+                    using (var httpClient = CreateHttpClientWithAdvancedSettings())
                     {
-                        var targetWebCordExePath = Path.Combine(targetPath, "webcord.exe");
-                        if (File.Exists(targetWebCordExePath))
+                        httpClient.Timeout = TimeSpan.FromMinutes(10); // İndirme için 10 dakikalık timeout
+
+                        var response = await httpClient.GetAsync(downloadUrl);
+                        response.EnsureSuccessStatusCode();
+
+                        using (var fileStream = File.Create(setupPath))
                         {
-                            CreateWebCordDesktopShortcut(targetWebCordExePath);
+                            await response.Content.CopyToAsync(fileStream);
                         }
                     }
+                }
+                catch (Exception ex)
+                {
+                    string errorMessage = ex.Message;
 
-                    // 4. ByeDPI kurulumu (sadece hiçbir hizmet yüklü değilse)
-                    if (!anyServiceInstalled)
+                    // Timeout hatası kontrolü
+                    if (ex is TaskCanceledException || ex.InnerException is TaskCanceledException ||
+                        errorMessage.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                        errorMessage.Contains("timed out", StringComparison.OrdinalIgnoreCase))
                     {
-                        // DNS ve DoH ayarlarını kontrol et
-                        bool enableAutoDNS = chkAutoDNSChange?.IsChecked == true;
-                        
-                        if (enableAutoDNS)
-                        {
-                            await SetModernDNSSettingsAsync();
-                        }
-                        
-                        await PerformByeDPISetupSilentAsync();
+                        errorMessage = LanguageManager.GetText("messages", "splitcord_download_timeout");
                     }
 
-                    // 5. Durumları güncelle
-                    CheckWebCordStatus();
+                    System.Windows.MessageBox.Show(
+                        string.Format(LanguageManager.GetText("messages", "splitcord_download_error"), errorMessage),
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                    ShowLoading(false);
+                    return;
+                }
 
-                    // 6. Başarı mesajı göster
-                    var successResult = System.Windows.MessageBox.Show(
-                        LanguageManager.GetText("messages", "webcord_install_success"),
-                        LanguageManager.GetText("messages", "webcord_install_success_title"), MessageBoxButton.YesNo, MessageBoxImage.Information);
+                // 3. SplitCord-Turkey kendi aşım özelliklerini içerdiğinden, aktif DPI aşım hizmetlerini durdur ve kaldır
+                if (anyServiceInstalled)
+                {
+                    await RemoveAllServicesAsync();
+                }
 
-                    if (successResult == MessageBoxResult.Yes)
+                // 4. Setup dosyasını sessizce (/S) çalıştır
+                bool installLaunchFailed = false;
+                try
+                {
+                    var psi = new ProcessStartInfo
                     {
-                        var targetWebCordExePath = Path.Combine(targetPath, "webcord.exe");
-                        if (File.Exists(targetWebCordExePath))
-                        {
-                            var psi = new ProcessStartInfo
-                            {
-                                FileName = targetWebCordExePath,
-                                UseShellExecute = true
-                            };
-                            Process.Start(psi);
-                        }
+                        FileName = setupPath,
+                        Arguments = "/S",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+
+                    var installerProcess = Process.Start(psi);
+                    if (installerProcess != null)
+                    {
+                        await installerProcess.WaitForExitAsync();
                     }
+                }
+                catch (Exception ex)
+                {
+                    installLaunchFailed = true;
+                    System.Windows.MessageBox.Show(
+                        string.Format(LanguageManager.GetText("messages", "splitcord_launch_error"), ex.Message),
+                        LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+
+                if (installLaunchFailed)
+                {
+                    ShowLoading(false);
+                    return;
+                }
+
+                // NSIS installer kendini geçici bir konuma kopyalayıp arka planda çalışmaya devam edebilir,
+                // bu yüzden kurulumun gerçekten tamamlandığını dosya sisteminden doğrulayarak bekle
+                bool installVerified = await WaitUntilSplitCordInstalledStateAsync(expectInstalled: true, TimeSpan.FromSeconds(60));
+
+                // 5. Durumları güncelle
+                CheckSplitCordStatus();
+
+                // 6. Sonuç mesajı
+                if (installVerified)
+                {
+                    System.Windows.MessageBox.Show(
+                        LanguageManager.GetText("messages", "splitcord_install_success"),
+                        LanguageManager.GetText("messages", "success_title"), MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    System.Windows.MessageBox.Show(
+                        LanguageManager.GetText("messages", "splitcord_install_unverified"),
+                        LanguageManager.GetText("messages", "splitcord_install_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
             catch (Exception ex)
@@ -13795,32 +17495,33 @@ echo Hizmet kurulum işlemi tamamlandı.
             finally
             {
                 ShowLoading(false);
+                CheckAllServices();
             }
         }
 
         /// <summary>
-        /// WebCord Yükle/Başlat butonu tıklama olayı
+        /// SplitCord-Turkey Yükle/Başlat butonu tıklama olayı
         /// </summary>
-        private async void BtnWebCordAction_Click(object sender, RoutedEventArgs e)
+        private void BtnSplitCordAction_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                var webCordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SplitWire-Turkey", "WebCord", "webcord.exe");
-                
-                if (File.Exists(webCordPath))
+                var splitCordExePath = FindSplitCordExecutablePath();
+
+                if (!string.IsNullOrEmpty(splitCordExePath) && File.Exists(splitCordExePath))
                 {
-                    // WebCord'u başlat
+                    // SplitCord-Turkey'i başlat
                     var psi = new ProcessStartInfo
                     {
-                        FileName = webCordPath,
+                        FileName = splitCordExePath,
                         UseShellExecute = true
                     };
                     Process.Start(psi);
                 }
                 else
                 {
-                    // WebCord yüklü değil, kurulum yap
-                    BtnWebCordInstall_Click(sender, e);
+                    // SplitCord-Turkey yüklü değil, kurulum yap
+                    BtnSplitCordInstall_Click(sender, e);
                 }
             }
             catch (Exception ex)
@@ -13832,49 +17533,82 @@ echo Hizmet kurulum işlemi tamamlandı.
         }
 
         /// <summary>
-        /// WebCord Kaldır butonu tıklama olayı
+        /// SplitCord-Turkey Kaldır butonu tıklama olayı
         /// </summary>
-        private async void BtnWebCordRemove_Click(object sender, RoutedEventArgs e)
+        private async void BtnSplitCordRemove_Click(object sender, RoutedEventArgs e)
         {
             try
             {
                 var result = System.Windows.MessageBox.Show(
-                    LanguageManager.GetText("messages", "confirm_remove_webcord"),
-                    LanguageManager.GetText("messages", "webcord_remove_title"), MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    LanguageManager.GetText("messages", "confirm_remove_splitcord"),
+                    LanguageManager.GetText("messages", "splitcord_remove_title"), MessageBoxButton.YesNo, MessageBoxImage.Question);
 
                 if (result == MessageBoxResult.Yes)
                 {
                     ShowLoading(true);
 
-                    var webCordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SplitWire-Turkey", "WebCord");
-                    
-                    if (Directory.Exists(webCordPath))
+                    var uninstallInfo = FindSplitCordUninstallInfo();
+
+                    if (uninstallInfo != null && !string.IsNullOrEmpty(uninstallInfo.Value.UninstallString))
                     {
-                        // WebCord süreçlerini kapat
-                        var webCordProcesses = Process.GetProcessesByName("webcord");
-                        foreach (var process in webCordProcesses)
+                        // SplitCord-Turkey süreçlerini kapat
+                        await CloseSplitCordProcessesAsync();
+
+                        var (uninstallExe, uninstallArgs) = ParseUninstallString(uninstallInfo.Value.UninstallString);
+
+                        if (!string.IsNullOrEmpty(uninstallExe) && File.Exists(uninstallExe))
                         {
-                            try
+                            // Uygulama zaten yönetici olarak çalıştığından ek bir yükseltmeye gerek yok
+                            var psi = new ProcessStartInfo
                             {
-                                process.Kill();
-                                await Task.Delay(500);
+                                FileName = uninstallExe,
+                                Arguments = string.IsNullOrEmpty(uninstallArgs) ? "/S" : $"{uninstallArgs} /S",
+                                UseShellExecute = false,
+                                CreateNoWindow = true,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true
+                            };
+
+                            var uninstallProcess = Process.Start(psi);
+                            if (uninstallProcess != null)
+                            {
+                                await uninstallProcess.WaitForExitAsync();
                             }
-                            catch { }
+
+                            // NSIS uninstaller kendini geçici bir konuma kopyalayıp arka planda çalışmaya devam edebilir,
+                            // bu yüzden kaldırmanın gerçekten tamamlandığını dosya sisteminden doğrulayarak bekle
+                            bool removed = await WaitUntilSplitCordInstalledStateAsync(expectInstalled: false, TimeSpan.FromSeconds(60));
+
+                            CheckSplitCordStatus();
+
+                            if (removed)
+                            {
+                                System.Windows.MessageBox.Show(
+                                    LanguageManager.GetText("messages", "splitcord_removed_success"),
+                                    LanguageManager.GetText("messages", "success_title"), MessageBoxButton.OK, MessageBoxImage.Information);
+                            }
+                            else
+                            {
+                                System.Windows.MessageBox.Show(
+                                    LanguageManager.GetText("messages", "splitcord_remove_unverified"),
+                                    LanguageManager.GetText("messages", "splitcord_remove_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                            }
                         }
-
-                        // Klasörü sil
-                        Directory.Delete(webCordPath, true);
+                        else
+                        {
+                            CheckSplitCordStatus();
+                            System.Windows.MessageBox.Show(
+                                LanguageManager.GetText("messages", "splitcord_not_installed"),
+                                LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Information);
+                        }
                     }
-
-                    // Masaüstü kısayollarını sil
-                    RemoveWebCordDesktopShortcuts();
-
-                    // Durumları güncelle
-                    CheckWebCordStatus();
-
-                    System.Windows.MessageBox.Show(
-                        LanguageManager.GetText("messages", "webcord_removed_success"),
-                        LanguageManager.GetText("messages", "success_title"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    else
+                    {
+                        CheckSplitCordStatus();
+                        System.Windows.MessageBox.Show(
+                            LanguageManager.GetText("messages", "splitcord_not_installed"),
+                            LanguageManager.GetText("messages", "error"), MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
                 }
             }
             catch (Exception ex)
@@ -13890,145 +17624,182 @@ echo Hizmet kurulum işlemi tamamlandı.
         }
 
         /// <summary>
-        /// WebCord durumunu kontrol eder
+        /// SplitCord-Turkey durumunu kontrol eder
         /// </summary>
-        private void CheckWebCordStatus()
+        private void CheckSplitCordStatus()
         {
             try
             {
-                var webCordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SplitWire-Turkey", "WebCord", "webcord.exe");
-                bool isWebCordInstalled = File.Exists(webCordPath);
+                var splitCordExePath = FindSplitCordExecutablePath();
+                bool isSplitCordInstalled = !string.IsNullOrEmpty(splitCordExePath);
 
-                if (isWebCordInstalled)
+                if (isSplitCordInstalled)
                 {
-                    lblWebCordStatus.Text = LanguageManager.GetText("ui_texts", "installed");
-                    btnWebCordAction.Content = LanguageManager.GetText("buttons", "start");
-                    if (tooltipWebCordAction != null)
-                        tooltipWebCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_start");
-                    
-                    btnWebCordRemove.Visibility = System.Windows.Visibility.Visible;
-                    
+                    lblSplitCordStatus.Text = LanguageManager.GetText("ui_texts", "installed");
+                    btnSplitCordAction.Content = LanguageManager.GetText("buttons", "start");
+                    if (tooltipSplitCordAction != null)
+                        tooltipSplitCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_start");
+
+                    btnSplitCordRemove.Visibility = System.Windows.Visibility.Visible;
+
                     bool isDarkMode = btnThemeToggle?.IsChecked == true;
-                    webCordStatus.Fill = isDarkMode ? 
+                    splitCordStatus.Fill = isDarkMode ?
                         new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#4CAF50")) :
                         System.Windows.Media.Brushes.Green;
-                    
-                    btnWebCordAction.Click -= BtnWebCordAction_Click;
-                    btnWebCordAction.Click += BtnWebCordAction_Click;
+
+                    btnSplitCordAction.Click -= BtnSplitCordAction_Click;
+                    btnSplitCordAction.Click += BtnSplitCordAction_Click;
                 }
                 else
                 {
-                    lblWebCordStatus.Text = LanguageManager.GetText("ui_texts", "not_installed");
-                    btnWebCordAction.Content = LanguageManager.GetText("buttons", "install");
-                    if (tooltipWebCordAction != null)
-                        tooltipWebCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_install");
-                    webCordStatus.Fill = System.Windows.Media.Brushes.Red;
-                    
-                    btnWebCordRemove.Visibility = System.Windows.Visibility.Collapsed;
-                    
-                    btnWebCordAction.Click -= BtnWebCordAction_Click;
-                    btnWebCordAction.Click += BtnWebCordAction_Click;
+                    lblSplitCordStatus.Text = LanguageManager.GetText("ui_texts", "not_installed");
+                    btnSplitCordAction.Content = LanguageManager.GetText("buttons", "install");
+                    if (tooltipSplitCordAction != null)
+                        tooltipSplitCordAction.Content = LanguageManager.GetText("ui_texts", "tooltip_install");
+                    splitCordStatus.Fill = System.Windows.Media.Brushes.Red;
+
+                    btnSplitCordRemove.Visibility = System.Windows.Visibility.Collapsed;
+
+                    btnSplitCordAction.Click -= BtnSplitCordAction_Click;
+                    btnSplitCordAction.Click += BtnSplitCordAction_Click;
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"WebCord durum kontrolü hatası: {ex.Message}");
+                Debug.WriteLine($"SplitCord-Turkey durum kontrolü hatası: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// WebCord masaüstü kısayolu oluşturur
+        /// Windows kayıt defterindeki "Program Ekle/Kaldır" girdilerini tarayarak SplitCord-Turkey'in
+        /// kurulum konumunu ve kaldırma komutunu bulur (electron-builder NSIS installer'ı bu kayıtları oluşturur)
         /// </summary>
-        private void CreateWebCordDesktopShortcut(string targetPath)
+        private (string InstallLocation, string UninstallString)? FindSplitCordUninstallInfo()
         {
-            try
+            string[] uninstallKeyPaths =
             {
-                // Tüm masaüstü konumlarını al
-                var desktopPaths = new List<string>
-                {
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
-                };
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
 
-                foreach (var desktopPath in desktopPaths)
+            foreach (var baseKeyPath in uninstallKeyPaths)
+            {
+                try
                 {
-                    if (Directory.Exists(desktopPath))
+                    using (var baseKey = Registry.LocalMachine.OpenSubKey(baseKeyPath))
                     {
-                        var shortcutPath = Path.Combine(desktopPath, "WebCord.lnk");
-                        
-                        // PowerShell kullanarak kısayol oluştur
-                        var psScript = $@"
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut('{shortcutPath.Replace("'", "''")}')
-$Shortcut.TargetPath = '{targetPath.Replace("'", "''")}'
-$Shortcut.WorkingDirectory = '{Path.GetDirectoryName(targetPath).Replace("'", "''")}'
-$Shortcut.Save()
-";
-                        
-                        var psi = new ProcessStartInfo
+                        if (baseKey == null) continue;
+
+                        foreach (var subKeyName in baseKey.GetSubKeyNames())
                         {
-                            FileName = "powershell.exe",
-                            Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{psScript}\"",
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        };
-                        
-                        Process.Start(psi)?.WaitForExit();
+                            using (var subKey = baseKey.OpenSubKey(subKeyName))
+                            {
+                                var displayName = subKey?.GetValue("DisplayName") as string;
+                                if (!string.IsNullOrEmpty(displayName) &&
+                                    displayName.IndexOf("SplitCord-Turkey", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    var installLocation = subKey.GetValue("InstallLocation") as string;
+                                    var uninstallString = subKey.GetValue("UninstallString") as string;
+                                    return (installLocation, uninstallString);
+                                }
+                            }
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"SplitCord-Turkey kayıt defteri taraması hatası ({baseKeyPath}): {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"WebCord kısayol oluşturma hatası: {ex.Message}");
-            }
+
+            return null;
         }
 
         /// <summary>
-        /// WebCord masaüstü kısayollarını kaldırır
+        /// SplitCord-Turkey.exe'nin kurulu olduğu konumu bulur. Önce kayıt defterine, bulunamazsa
+        /// bilinen Program Files konumlarına bakar.
         /// </summary>
-        private void RemoveWebCordDesktopShortcuts()
+        private string FindSplitCordExecutablePath()
         {
-            try
+            var uninstallInfo = FindSplitCordUninstallInfo();
+            if (uninstallInfo != null && !string.IsNullOrEmpty(uninstallInfo.Value.InstallLocation))
             {
-                var desktopPaths = new List<string>
+                var candidate = Path.Combine(uninstallInfo.Value.InstallLocation, "SplitCord-Turkey.exe");
+                if (File.Exists(candidate))
                 {
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+                    return candidate;
+                }
+            }
+
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (!drive.IsReady) continue;
+
+                var paths = new[]
+                {
+                    Path.Combine(drive.Name, "Program Files", "SplitCord-Turkey", "SplitCord-Turkey.exe"),
+                    Path.Combine(drive.Name, "Program Files (x86)", "SplitCord-Turkey", "SplitCord-Turkey.exe")
                 };
 
-                foreach (var desktopPath in desktopPaths)
+                foreach (var path in paths)
                 {
-                    var shortcutPath = Path.Combine(desktopPath, "WebCord.lnk");
-                    if (File.Exists(shortcutPath))
+                    if (File.Exists(path))
                     {
-                        File.Delete(shortcutPath);
+                        return path;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"WebCord kısayol silme hatası: {ex.Message}");
-            }
+
+            return null;
         }
 
         /// <summary>
-        /// Klasör içeriğini kopyalar
+        /// NSIS installer/uninstaller kendini geçici bir konuma kopyalayıp arka planda çalışmaya devam edebildiğinden,
+        /// başlattığımız sürecin çıkışını beklemek tek başına yeterli değildir. Bu yüzden beklenen kurulum durumuna
+        /// (kurulu/kaldırılmış) ulaşılana ya da zaman aşımına uğrayana kadar dosya sisteminden periyodik olarak kontrol eder.
         /// </summary>
-        private void CopyDirectory(string sourceDir, string targetDir, bool overwrite)
+        private async Task<bool> WaitUntilSplitCordInstalledStateAsync(bool expectInstalled, TimeSpan timeout)
         {
-            Directory.CreateDirectory(targetDir);
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            foreach (var file in Directory.GetFiles(sourceDir))
+            while (stopwatch.Elapsed < timeout)
             {
-                var targetFile = Path.Combine(targetDir, Path.GetFileName(file));
-                File.Copy(file, targetFile, overwrite);
+                bool isInstalled = !string.IsNullOrEmpty(FindSplitCordExecutablePath());
+                if (isInstalled == expectInstalled)
+                {
+                    return true;
+                }
+
+                await Task.Delay(1000);
             }
 
-            foreach (var directory in Directory.GetDirectories(sourceDir))
+            return !string.IsNullOrEmpty(FindSplitCordExecutablePath()) == expectInstalled;
+        }
+
+        /// <summary>
+        /// Kayıt defterinden alınan UninstallString değerini çalıştırılabilir dosya ve argümanlara ayırır
+        /// </summary>
+        private (string ExePath, string Arguments) ParseUninstallString(string uninstallString)
+        {
+            if (string.IsNullOrWhiteSpace(uninstallString))
             {
-                var targetSubDir = Path.Combine(targetDir, Path.GetFileName(directory));
-                CopyDirectory(directory, targetSubDir, overwrite);
+                return (null, null);
             }
+
+            var trimmed = uninstallString.Trim();
+
+            if (trimmed.StartsWith("\""))
+            {
+                var closingQuoteIndex = trimmed.IndexOf('"', 1);
+                if (closingQuoteIndex > 0)
+                {
+                    var exePath = trimmed.Substring(1, closingQuoteIndex - 1);
+                    var arguments = trimmed.Substring(closingQuoteIndex + 1).Trim();
+                    return (exePath, arguments);
+                }
+            }
+
+            return (trimmed, null);
         }
 
         /// <summary>
@@ -14710,14 +18481,14 @@ $Shortcut.Save()
             paragraph.Inlines.Add(new LineBreak());
             paragraph.Inlines.Add(new LineBreak());
             
-            // WebCord Yükle
-            var webCordTitle = new Run(LanguageManager.GetText("discord_repair_help", "webcord_title"))
+            // SplitCord Yükle
+            var splitCordTitle = new Run(LanguageManager.GetText("discord_repair_help", "splitcord_title"))
             {
                 FontWeight = FontWeights.Bold
             };
-            var webCordText = new Run(LanguageManager.GetText("discord_repair_help", "webcord_text"));
-            paragraph.Inlines.Add(webCordTitle);
-            paragraph.Inlines.Add(webCordText);
+            var splitCordText = new Run(LanguageManager.GetText("discord_repair_help", "splitcord_text"));
+            paragraph.Inlines.Add(splitCordTitle);
+            paragraph.Inlines.Add(splitCordText);
             paragraph.Inlines.Add(new LineBreak());
             paragraph.Inlines.Add(new LineBreak());
             
@@ -14740,17 +18511,6 @@ $Shortcut.Save()
             var toggleText = new Run(LanguageManager.GetText("discord_repair_help", "toggle_text"));
             paragraph.Inlines.Add(toggleTitle);
             paragraph.Inlines.Add(toggleText);
-            paragraph.Inlines.Add(new LineBreak());
-            paragraph.Inlines.Add(new LineBreak());
-
-            // WebCord için kısayol oluştur
-            var webCordShortcutTitle = new Run(LanguageManager.GetText("discord_repair_help", "webcord_shortcut_title"))
-            {
-                FontWeight = FontWeights.Bold
-            };
-            var webCordShortcutText = new Run(LanguageManager.GetText("discord_repair_help", "webcord_shortcut_text"));
-            paragraph.Inlines.Add(webCordShortcutTitle);
-            paragraph.Inlines.Add(webCordShortcutText);
             paragraph.Inlines.Add(new LineBreak());
             paragraph.Inlines.Add(new LineBreak());
 
@@ -14803,21 +18563,23 @@ $Shortcut.Save()
         }
 
         /// <summary>
-        /// WebCord süreçlerini kapatır
+        /// SplitCord süreçlerini kapatır
         /// </summary>
-        private async Task CloseWebCordProcessesAsync()
+        private async Task CloseSplitCordProcessesAsync()
         {
             try
             {
-                var webCordProcesses = Process.GetProcessesByName("webcord");
-                
-                if (webCordProcesses.Length > 0)
+                var names = new[] { "SplitWire-Turkey", "SplitCord-Turkey" };
+                var currentPid = Process.GetCurrentProcess().Id;
+
+                foreach (var name in names)
                 {
-                    foreach (var process in webCordProcesses)
+                    var processes = Process.GetProcessesByName(name);
+                    foreach (var process in processes)
                     {
                         try
                         {
-                            if (!process.HasExited)
+                            if (process.Id != currentPid && !process.HasExited)
                             {
                                 process.Kill();
                                 await process.WaitForExitAsync();
@@ -14825,7 +18587,7 @@ $Shortcut.Save()
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"WebCord süreci sonlandırılırken hata: {ex.Message}");
+                            Debug.WriteLine($"{name} süreci sonlandırılırken hata: {ex.Message}");
                         }
                         finally
                         {
@@ -14836,7 +18598,7 @@ $Shortcut.Save()
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"WebCord süreçleri kapatılırken hata: {ex.Message}");
+                Debug.WriteLine($"Uygulama süreçleri kapatılırken hata: {ex.Message}");
             }
         }
 

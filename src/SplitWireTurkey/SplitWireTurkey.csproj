@@ -13,8 +13,8 @@
     <AssemblyCompany>Çağrı Taşkın</AssemblyCompany>
     <AssemblyProduct>SplitWire-Turkey</AssemblyProduct>
     <AssemblyCopyright>© 2025 Çağrı Taşkın</AssemblyCopyright>
-    <AssemblyVersion>1.5.5</AssemblyVersion>
-    <FileVersion>1.5.5</FileVersion>
+    <AssemblyVersion>1.5.6</AssemblyVersion>
+    <FileVersion>1.5.6</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Disable trimming for WPF -->
     <PublishTrimmed>false</PublishTrimmed>
@@ -58,6 +58,7 @@
   </ItemGroup>
 
 </Project> 
+
 
 
 
