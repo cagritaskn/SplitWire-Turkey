@@ -3618,7 +3618,7 @@ namespace SplitWireTurkey
                 }
 
                 // WireSock'u ek olarak kendi servisi üzerinden tam temizle (CLI bağlantısı, profil, servisler)
-                await _wireSockService.RemoveServiceAsync();
+                await _wireSockService.RemoveServiceAsync(logPath);
 
                 // Windows Firewall kurallarını da temizle
                 File.AppendAllText(logPath, "Windows Firewall kuralları temizleniyor...\n");
@@ -4115,10 +4115,10 @@ namespace SplitWireTurkey
             
             try
             {
-                var success = await _wireSockService.RemoveServiceAsync();
+                var success = await _wireSockService.RemoveServiceAsync(GetLogPath());
                 if (success)
                 {
-                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_removed"), 
+                    System.Windows.MessageBox.Show(LanguageManager.GetText("messages", "wiresock_removed"),
                         LanguageManager.GetText("messages", "success"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
@@ -4264,7 +4264,7 @@ namespace SplitWireTurkey
                 
                 // WireSock hizmetini kaldır
                 File.AppendAllText(logPath, "WireSock hizmeti kaldırılıyor...\n");
-                var wiresockRemoved = await _wireSockService.RemoveServiceAsync();
+                var wiresockRemoved = await _wireSockService.RemoveServiceAsync(logPath);
                 File.AppendAllText(logPath, "WireSock hizmeti kaldırma tamamlandı.\n");
                 
                 // GoodbyeDPI ve WinDivert hizmetlerini kaldır
@@ -7981,7 +7981,7 @@ $dohResults | ConvertTo-Json
                 // "Kaldır" butonunun (BtnWireSockRemove_Click) kullandığı, zaten kanıtlanmış
                 // tam temizleme mantığı. Motor "temiz kurulum" akışları bunu tekrar yazmak
                 // yerine doğrudan bunu çağırıyor.
-                var removed = _wireSockService.RemoveServiceAsync().GetAwaiter().GetResult();
+                var removed = _wireSockService.RemoveServiceAsync(logPath).GetAwaiter().GetResult();
                 File.AppendAllText(logPath, $"WireSock tam kaldırma sonucu: {removed}\n");
             }
             catch (Exception ex)
@@ -11780,7 +11780,7 @@ echo Hizmet kurulum işlemi tamamlandı.
 
                 if (serviceName == "wiresock-client-service")
                 {
-                    await _wireSockService.RemoveServiceAsync();
+                    await _wireSockService.RemoveServiceAsync(GetLogPath());
                 }
                 else if (serviceName == "WinDivert")
                 {

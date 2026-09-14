@@ -229,41 +229,88 @@ namespace SplitWireTurkey.Services
             }
         }
 
-        public async Task<bool> RemoveServiceAsync()
+        // ÖNEMLİ (kullanıcının "diğer kurulumların temizliğinde WireSock kaldırılmıyor" bildirimiyle
+        // bulunan sorun): gerçek ürün kaldırıcısını (WiX Burn/MSI) çalıştırmak her kurulumdan önce
+        // çok vakit alabileceği için KULLANILMIYOR -- onun yerine sc stop/sc delete korunuyor, ama
+        // artık (1) her komutun gerçek exit code'u logPath varsa loglanıyor ve (2) delete'ten sonra
+        // servislerin GERÇEKTEN kaldırıldığı "sc query" ile birkaç kez POLL edilerek doğrulanıyor --
+        // "sc delete" bir servis hâlâ durma aşamasındayken çağrılırsa SCM'de "marked for deletion"
+        // olarak kısa süre kalabiliyor, bu yüzden dönüş değeri artık gerçek doğrulama sonucunu
+        // yansıtıyor (öncesinde her zaman true dönüyordu, hata olsa bile).
+        public async Task<bool> RemoveServiceAsync(string logPath = null)
         {
+            void Log(string msg)
+            {
+                if (string.IsNullOrEmpty(logPath)) return;
+                try { File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [WireSockService.RemoveServiceAsync] {msg}\n"); } catch { }
+            }
+
             try
             {
                 var wiresockExe = FindWireSockPath();
                 if (!string.IsNullOrEmpty(wiresockExe) && File.Exists(wiresockExe) && IsModernWireSock(wiresockExe))
                 {
+                    Log("Modern WireSock tespit edildi -- tunel baglantisi kesiliyor ve profil siliniyor.");
                     // Modern WireSock: Tünel bağlantısını kes ve profili temizle
                     try { await ExecuteCommandAsync(wiresockExe, "disconnect"); } catch { }
                     try { await ExecuteCommandAsync(wiresockExe, "delete \"wgcf-profile\""); } catch { }
                 }
                 else if (!string.IsNullOrEmpty(wiresockExe) && File.Exists(wiresockExe))
                 {
+                    Log("Legacy WireSock tespit edildi -- uninstall komutu calistiriliyor.");
                     try { await ExecuteCommandAsync(wiresockExe, "uninstall"); } catch { }
                 }
+                else
+                {
+                    Log("WireSock yurutulebilir dosyasi bulunamadi (zaten kurulu degil olabilir), servis temizligine devam ediliyor.");
+                }
 
-                // Modern WireSock ve Legacy servislerini durdur
-                await ExecuteCommandAsync("sc", "stop WireSockAppService");
-                await ExecuteCommandAsync("sc", "stop WireSockConnectService");
-                await ExecuteCommandAsync("sc", "stop wiresock-client-service");
-                await Task.Delay(1000);
+                var serviceNames = new[] { "WireSockAppService", "WireSockConnectService", "wiresock-client-service" };
 
-                // Servisleri sistemden sil
-                await ExecuteCommandAsync("sc", "delete WireSockAppService");
-                await ExecuteCommandAsync("sc", "delete WireSockConnectService");
-                await ExecuteCommandAsync("sc", "delete wiresock-client-service");
+                foreach (var svc in serviceNames)
+                {
+                    var stopCode = await ExecuteCommandAsync("sc", $"stop {svc}");
+                    Log($"sc stop {svc} -> exit code {stopCode}");
+                }
 
-                // WireSockRefresh görevini kaldır
-                await ExecuteCommandAsync("schtasks", "/delete /tn \"WireSockRefresh\" /f");
+                await Task.Delay(1500);
 
-                return true;
+                foreach (var svc in serviceNames)
+                {
+                    var deleteCode = await ExecuteCommandAsync("sc", $"delete {svc}");
+                    Log($"sc delete {svc} -> exit code {deleteCode}");
+                }
+
+                var taskDeleteCode = await ExecuteCommandAsync("schtasks", "/delete /tn \"WireSockRefresh\" /f");
+                Log($"schtasks /delete WireSockRefresh -> exit code {taskDeleteCode}");
+
+                // Doğrulama: "sc query" artık hiçbirini bulamıyor mu? (exit code != 0 demek servis
+                // kayıtlı değil demek). Silme henüz SCM'e işlenmemiş olabileceğinden birkaç kez poll et.
+                bool allRemoved = false;
+                for (int attempt = 0; attempt < 6 && !allRemoved; attempt++)
+                {
+                    if (attempt > 0) await Task.Delay(1000);
+                    allRemoved = true;
+                    foreach (var svc in serviceNames)
+                    {
+                        var queryCode = await ExecuteCommandAsync("sc", $"query {svc}");
+                        if (queryCode == 0)
+                        {
+                            allRemoved = false;
+                        }
+                    }
+                }
+
+                Log(allRemoved
+                    ? "Dogrulama basarili: sc query artik uc servisin hicbirini bulamiyor."
+                    : "UYARI: dogrulama basarisiz -- birkac deneme sonrasinda hala 'sc query' ile bulunan WireSock servisi var.");
+
+                return allRemoved;
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show(string.Format(LanguageManager.GetText("messages", "wiresock_remove_error"), ex.Message), 
+                Log($"HATA: {ex.Message}");
+                System.Windows.MessageBox.Show(string.Format(LanguageManager.GetText("messages", "wiresock_remove_error"), ex.Message),
                     LanguageManager.GetText("messages", "unexpected_error_title"), MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }
