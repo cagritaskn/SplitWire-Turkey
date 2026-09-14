@@ -9,6 +9,11 @@ EXEDIR="$(cd "$EXEDIR"; pwd)"
 # HIDDEN_MODE çevre değişkenini ayarla (blockcheck.sh için)
 export HIDDEN_MODE=1
 
+# Test domaini: blockcheck.sh'in kendi varsayilani (DOMAINS=${DOMAINS:-"roblox.com"}) roblox.com --
+# ama bu uygulamanin asil hedefi Discord oldugundan, gercekten onemli olan domain uzerinden
+# test yapmasi icin discord.com'a sabitliyoruz.
+export DOMAINS=discord.com
+
 # Blockcheck'i çalıştır ve çıktıyı log dosyasına yönlendir
 "$EXEDIR/blockcheck.sh" 2>&1 | tee "$EXEDIR/../blockcheck.log"
 

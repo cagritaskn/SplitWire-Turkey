@@ -1,0 +1,16 @@
+Turk Telekom:--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1
+Superonline:--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1
+Vodafone:--payload=tls_client_hello --lua-desync=multisplit:blob=fake_default_tls:ip_ttl=5:pos=2:nodrop:repeats=1
+Turksat Kablonet:--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1
+Telekom Mobil:--payload=tls_client_hello --lua-desync=fake:blob=0x00000000:ip_ttl=5:repeats=1
+Turkcell Mobil:--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1
+Vodafone Mobil:--payload=tls_client_hello --lua-desync=multidisorder:pos=2:seqovl=1
+Standart:--wf-l3=ipv4 --wf-tcp-out=443 --in-range=-s1 --lua-desync=oob:urp=b
+Alternatif 1:--wf-l3=ipv4 --wf-tcp-out=443 --in-range=-s1 --lua-desync=oob:urp=0
+Alternatif 2:--wf-l3=ipv4 --wf-tcp-out=80 --in-range=-s1 --lua-desync=oob:urp=0
+Alternatif 3:--wf-l3=ipv4 --wf-tcp-out=80 --in-range=-s1 --lua-desync=oob:urp=b
+Alternatif 4:--wf-l3=ipv4 --wf-tcp-out=80 --payload=http_req --lua-desync=http_hostcase:spell=hoSt
+Alternatif 5:--wf-l3=ipv4 --wf-tcp-out=80 --payload=http_req --lua-desync=multidisorder:pos=midsld:seqovl=midsld-1
+Alternatif 6:--wf-l3=ipv4 --wf-tcp-out=80 --payload=http_req --lua-desync=multidisorder:pos=method+2,midsld
+Alternatif 7:--wf-l3=ipv4 --wf-tcp-out=80 --payload=http_req --lua-desync=multidisorder:pos=method+2:seqovl=method+1
+Alternatif 8:--wf-l3=ipv4 --wf-tcp-out=80 --payload=http_req --lua-desync=multidisorder:pos=method+2:seqovl=method+1:seqovl_pattern=fake_default_http

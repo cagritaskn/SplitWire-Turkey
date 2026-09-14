@@ -5,4 +5,3 @@ SuperOnline Alternatif:--wf-tcp=80,443 --wf-udp=443,50000-50099 --dpi-desync=fak
 Kablonet:--wf-tcp=80,443 --wf-udp=443,50000,50100 --dpi-desync=fake --dpi-desync-ttl=4
 Turkcell Hotspot:--wf-tcp=80,443 --wf-udp=443,50000,50100 --dpi-desync=fake --dpi-desync-ttl=1 --dpi-desync-autottl=3
 Vodafone Hotspot:--wf-tcp=80,443 --wf-udp=443,50000,50100 --dpi-desync=multisplit --dpi-desync-split-pos=2
-

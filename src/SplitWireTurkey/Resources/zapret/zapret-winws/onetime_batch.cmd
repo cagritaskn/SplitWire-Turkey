@@ -15,7 +15,7 @@ echo Zapret tek seferlik çalıştırılıyor...
 echo Parametreler: %*
 
 REM Zapret'i çalıştır
-"%~dp0winws.exe" %*
+"%~dp0winws.exe" %* --hostlist-exclude=%~dp0splitwire-exclude.txt
 
 if %ERRORLEVEL% EQU 0 (
     echo Zapret başarıyla çalıştırıldı.

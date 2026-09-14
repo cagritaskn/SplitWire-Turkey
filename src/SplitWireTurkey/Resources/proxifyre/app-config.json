@@ -3,8 +3,10 @@
     "proxies": [
       {
         "appNames": [
-          "webcord",
+          "SplitCord-Turkey.exe",
 		  "roblox",
+          "RobloxPlayerBeta.exe",
+          "RobloxPlayerInstaller.exe",
           "discord",
           "Discord.exe",
           "Update.exe",
@@ -26,8 +28,7 @@
         ],
         "socks5ProxyEndpoint": "127.0.0.1:1080",
         "supportedProtocols": [
-          "TCP",
-          "UDP"
+          "TCP"
         ]
       }
     ]

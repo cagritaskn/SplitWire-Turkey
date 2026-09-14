@@ -29,13 +29,15 @@ foreach ($adapter in $adapters) {
     
     Write-Host "Processing adapter: $adapterName" -ForegroundColor Green
     
-    # Reset IPv4 DNS settings to automatic
+    # Reset IPv4 and IPv6 DNS settings to automatic
     try {
-        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses
-        Write-Host "  IPv4 DNS settings reset to automatic: $adapterName" -ForegroundColor Green
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+        netsh interface ip set dns "$adapterName" dhcp | Out-Null
+        netsh interface ipv6 set dns "$adapterName" dhcp | Out-Null
+        Write-Host "  IPv4 and IPv6 DNS settings reset to automatic: $adapterName" -ForegroundColor Green
     }
     catch {
-        Write-Host "  Failed to reset IPv4 DNS settings: $adapterName - $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  Failed to reset DNS settings: $adapterName - $($_.Exception.Message)" -ForegroundColor Red
     }
     
     # Clear DoH settings
