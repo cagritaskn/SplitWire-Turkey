@@ -112,7 +112,7 @@ namespace SplitWireTurkey.Services
                     "roblox",
                     "Discord.exe",
                     "DiscordPTB.exe",
-                    "webcord.exe",
+                    "SplitCord-Turkey.exe",
                     "SplitWire-Turkey.exe",
                     "Update.exe",
                     "RobloxPlayerBeta.exe",
