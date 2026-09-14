@@ -31,17 +31,15 @@ You can follow the installation and usage instructions from the video guide prep
 
 # Download and Installation
 
-## Installation with Setup File (Recommended) [![Download Setup](https://img.shields.io/badge/Download-Setup-blue?logo=windows)](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-Setup-Windows-1.5.5.exe)
-- Download the **[SplitWire-Turkey Setup](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-Setup-Windows-1.5.5.exe)** installation package and perform the SplitWire-Turkey installation. (If you get a SmartScreen "Windows protected your personal computer" warning, click "More info" and then click "Run anyway", information about virus scanning and this warning is provided below)
+## Installation with Setup File (Recommended) [![Download Setup](https://img.shields.io/badge/Download-Setup-blue?logo=windows)](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.6/SplitWire-Turkey-Setup-Windows-1.5.6.exe)
+- Download the **[SplitWire-Turkey Setup](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.6/SplitWire-Turkey-Setup-Windows-1.5.6.exe)** installation package and perform the SplitWire-Turkey installation. (If you get a SmartScreen "Windows protected your personal computer" warning, click "More info" and then click "Run anyway", information about virus scanning and this warning is provided below)
 - Open the **SplitWire-Turkey** application.
 - Follow the **Usage Guides** section for using the application.
 
-## Usage with ZIP File (Not Recommended) [![Download ZIP](https://img.shields.io/badge/Download-ZIP-blue?logo=windows)](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-ZIP-Windows-1.5.5.zip)
-- Download the **[SplitWire-Turkey ZIP](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-ZIP-Windows-1.5.5.zip)** file and extract it to a folder.
+## Usage with ZIP File (Not Recommended) [![Download ZIP](https://img.shields.io/badge/Download-ZIP-blue?logo=windows)](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.6/SplitWire-Turkey-ZIP-Windows-1.5.6.zip)
+- Download the **[SplitWire-Turkey ZIP](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.6/SplitWire-Turkey-ZIP-Windows-1.5.6.zip)** file and extract it to a folder.
 - Open the **SplitWire-Turkey.exe** application in the folder where you extracted the ZIP file. (If you get a SmartScreen "Windows protected your personal computer" warning, click "More info" and then click "Run anyway", information about virus scanning and this warning is provided below)
 - Follow the **Usage Guides** section for using the application.
-
-**Note:** If you experience problems downloading WebCord from within the program, you can download and use the [SplitWire-Turkey-ZIP-Windows-1.5.5-WebCord-Included.zip](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-ZIP-Windows-1.5.5-WebCord-Included.zip) file, which already includes WebCord integrated with SplitWire-Turkey.
 
 ---
 
@@ -51,9 +49,9 @@ You can follow the installation and usage instructions from the video guide prep
 
 **Note:** The installations in this section work only for the Discord application (browsers are also included if you have enabled browser tunneling). After performing these installations, the relevant method will automatically start working every time you restart your system.
 
-- **WS Standard Installation:** Uses Wgcf and WireSock 2.4.23.1 tools to perform tunneling only for Discord. (If the "Tunnel for browsers too" option is enabled, tunneling is also performed for internet browsers)
+- **WS Standard Installation:** Installs WireSock 3.4.8.1 together with ByeDPI-Drover; text channels are routed via ByeDPI, voice channels via WireSock. (If the "Tunnel for browsers too" option is enabled, tunneling is also performed for internet browsers)
 
-- **WS Alternative Installation:** Uses Wgcf and WireSock 1.4.7.1 tools to perform tunneling ONLY for Discord. (If the "Tunnel for browsers too" option is enabled, tunneling is also performed for internet browsers)
+- **WS Alternative Installation:** Installs standalone WireSock 3.4.8.1 only (without ByeDPI and Drover); all traffic is tunneled directly through WireSock. (If the "Tunnel for browsers too" option is enabled, tunneling is also performed for internet browsers)
 
 - **Tunnel for browsers too:** In addition to the Discord application; tunneling is performed for popular internet browsers such as Chrome, Firefox, Opera, OperaGX, Brave, Vivaldi, Zen, Chromium and Edge.
 
@@ -114,6 +112,37 @@ You can follow the installation and usage instructions from the video guide prep
 
 ---
 
+## Zapret2 Page Usage
+
+**Note:** The installations in this section work system-wide. Although they do not cause speed loss, they may cause connection problems in some websites and applications. After performing these installations, the relevant method will automatically start working every time you restart your system.
+
+- **Zapret2 Automatic Installation:** Ideal parameters are found for your system and internet service provider using Zapret2's blockcheck strategy finding software, and DPI bypass is provided by installing Zapret2 with these parameters.
+
+- **Scanning:** Selects the speed of the scan performed to find ideal parameters.
+  - **Fast:** Can take 2-10 minutes.
+  - **Standard:** Can take 5-30 minutes.
+  - **Full:** Can take 10-50 minutes.
+
+> These times are estimated times. They may vary depending on your system and your internet provider's packet inspection policies.
+
+- **Ready Settings:** Selects one of the predetermined parameters for Zapret2. Presets for Türk Telekom, Superonline, Vodafone, Türksat Kablonet, Telekom Mobil, Turkcell Mobil and Vodafone Mobil are included; these are also tried automatically before a full scan in Automatic Installation. (Thanks to Bal Porsuğu for the ready settings)
+
+- **Edit Ready Settings:** Opens a text box that allows you to fine-tune or modify the ready setting you selected. After making edits in this box, you can install or run once using the parameters in the box with the buttons below.
+
+- **Use Exclusion List:** Uses a list of domains that Zapret2 will not apply DPI bypass to (will not touch). If you turn it off, the list is temporarily emptied (no need to restart Zapret2, the change is applied automatically); when you turn it back on, the same list comes back.
+
+- **Edit Exclusion List:** Opens a text box where you can edit the domains in the exclusion list. After editing, you can save the changes by clicking the Save button.
+
+- **Install Ready Service:** Installs the Zapret2 service with your selected ready setting (or the edited version if you made edits).
+
+- **Ready One-time:** Runs Zapret2 once with your selected ready setting (or the edited version if you made edits). When you close the opened console window, Zapret2 stops running.
+
+- **Remove Zapret2:** Removes Zapret2.
+
+**Note 2:** If the Discord application gets stuck on the "Checking for updates..." screen, turn off your modem, wait 15 seconds, then turn it back on and restart your computer.
+
+---
+
 ## GoodbyeDPI Page Usage
 
 **Note:** The installation in this section works system-wide. Although it does not cause speed loss, it may cause connection problems in some websites and applications. To prevent such problems, you can activate the "Use blacklist" option. After performing this installation, the relevant method will automatically start working every time you restart your system.
@@ -144,11 +173,7 @@ You can follow the installation and usage instructions from the video guide prep
 
 - **Install Discord PTB:** If Discord PTB version is installed, removes it and downloads and installs Discord PTB version from the official Discord site.
 
-- **Install WebCord:** Installs WebCord, an open-source wrapper of the Discord website written with Electron. Also installs ByeDPI if there is no bypass method already installed.
-
 - **Perform clean installation for Discord PTB:** If this option is active when the Install Discord PTB button is clicked, it removes the standard Discord while installing Discord PTB.
-
-- **Create shortcut for WebCord:** Creates a WebCord shortcut for easy access from the desktop during WebCord installation.
 
 - **Status Controls:** Shows installed Discord versions and performs installation/removal and running operations.
 
@@ -160,7 +185,9 @@ You can follow the installation and usage instructions from the video guide prep
 
 - **Services:** Shows the list of DPI bypass and tunneling related services installed by SplitWire-Turkey or by the user.
 
-- **Apply DNS and DoH settings on every installation:** Google DNS and Quad9 (with DoH enabled) are configured in all bypass method installations that can be performed within SplitWire-Turkey. You can disable automatic DNS and DoH configuration by turning off this switch.
+- **Apply DNS and DoH settings on every installation:** A system-wide DNS setting is automatically applied in all bypass method installations that can be performed within SplitWire-Turkey. Which method is used (DnsCrypt-Proxy or Google DNS/Quad9 with DoH) is determined by the **DNS Method** switch directly below. You can disable automatic DNS and DoH configuration (and therefore DnsCrypt-Proxy installation) entirely by turning off this switch.
+
+- **DNS Method (DnsCrypt-Proxy / Windows DoH):** When enabled (and the DNS switch above is on), DnsCrypt-Proxy (encrypted DNS) is automatically installed and started on every setup/one-time start/blockcheck; your DNS server is pointed to 127.0.0.1 and ::1 (preventing plaintext leaks). If DnsCrypt-Proxy is already installed, it is not reinstalled. If this switch is turned off, native Windows DoH (Google DNS and Quad9) is used instead. The two methods are never used at the same time.
 
 - **Remove All Services:** Removes all services in the list in the correct order, deletes drover files in the Discord folder and removes the WireSock Refresh Task Scheduler task.
 
@@ -190,10 +217,13 @@ You can follow the installation and usage instructions from the video guide prep
 > If you are using an antivirus software other than Windows Defender, you may need to manually add rules to allow the executable files named "Program Files\SplitWire-Turkey\res\byedpi\ciadpi.exe" and "Program Files\SplitWire-Turkey\res\proxifyre\ProxiFyre.exe" in the firewall of the relevant antivirus software. For Windows Defender, firewall rules are added automatically, you don't need to do any extra operations. **If the antivirus software you use does not have its own network firewall feature or if you are not using an antivirus software other than Windows Defender, you can ignore this warning.**
 
 > [!NOTE]
-> Since the use of WinDivert files is blocked by the antivirus software named Kaspersky, you cannot use the GoodbyeDPI and Zapret tabs while Kaspersky is installed on your system. After completely removing Kaspersky from your system, download the **[SplitWire-Turkey Setup](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.5/SplitWire-Turkey-Setup-Windows-1.5.5.exe)** file and perform installation again, these tabs will become active. You can also try to solve this problem by adding C:\Program Files\SplitWire-Turkey and C:\Users\-Username-\AppData\Local\SplitWire-Turkey folders to Kaspersky exceptions and downloading and installing SplitWire-Turkey again.
+> Since the use of WinDivert files is blocked by the antivirus software named Kaspersky, you cannot use the GoodbyeDPI and Zapret tabs while Kaspersky is installed on your system. After completely removing Kaspersky from your system, download the **[SplitWire-Turkey Setup](https://github.com/cagritaskn/SplitWire-Turkey/releases/download/1.5.6/SplitWire-Turkey-Setup-Windows-1.5.6.exe)** file and perform installation again, these tabs will become active. You can also try to solve this problem by adding C:\Program Files\SplitWire-Turkey and C:\Users\-Username-\AppData\Local\SplitWire-Turkey folders to Kaspersky exceptions and downloading and installing SplitWire-Turkey again.
 
 > [!NOTE]
 > If you experience problems with WinDivert files in SplitWire-Turkey v1.5 and later versions for any reason, you can download and use the old version from [SplitWire-Turkey Release 1.0.0](https://github.com/cagritaskn/SplitWire-Turkey/releases/tag/1.0.0).
+
+> [!NOTE]
+> You can also check out our new project, **[SplitCord-Turkey](https://github.com/cagritaskn/SplitCord-Turkey)**.
 
 ---
 
@@ -216,6 +246,8 @@ SplitWire-Turkey is currently only supported for Windows operating system. For m
 
 - Creating error reports: You can go to the [SplitWire-Turkey Issues page](https://github.com/cagritaskn/SplitWire-Turkey/issues) and click the **New Issue** button in the top right, and report by adding the .log files in the AppData\Local\SplitWire-Turkey\Logs folder to your report. You can open the Logs folder using the Open Logs Folder button at the bottom of the About page of the SplitWire-Turkey program.
 
+- If you keep experiencing issues with the Discord client itself, you can try our alternative project, **[SplitCord-Turkey](https://github.com/cagritaskn/SplitCord-Turkey)**.
+
 ---
 
 ## Removing SplitWire-Turkey from System and Reverting All Changes
@@ -233,10 +265,10 @@ If you wish, you can scan the entire folder, installation file, .zip file or sou
 > **SmartScreen "Windows protected your personal computer"** warning appears before running all unsigned software. The reason for this is that software must be subject to international code signing certificates. However, since this signing process requires regular payment based on the exchange rate and I am an independent developer who does not earn income, I cannot attempt to sign the software.
 
 > [!NOTE]
-> **[SplitWire-Turkey Setup file VirusTotal results](https://www.virustotal.com/gui/file/ea2c0c4a81e2256f9d09d59dfdcba0fbd8daca66086808d48290240f20d8ce5b?nocache=1)** False positive virus or malware reports detected by antivirus software used by a small segment of users may be detected in the files, but these are software with unreliable detection methods. The reason for detection is that SplitWire-Turkey installs multiple applications from a single program and makes many changes on the system. (DNS changes, service and program package installation, removal, etc.) I recommend reading the notes given below for your concerns about Kaspersky.
+> **[SplitWire-Turkey Setup file VirusTotal results](https://www.virustotal.com/gui/file-analysis/NmI3NGJkOWE2NzM4MDI5ZWEyMDRkNGI1NDMwMzZhZWU6MTc4OTQwMzEwMw==)** False positive virus or malware reports detected by antivirus software used by a small segment of users may be detected in the files, but these are software with unreliable detection methods. The reason for detection is that SplitWire-Turkey installs multiple applications from a single program and makes many changes on the system. (DNS changes, service and program package installation, removal, etc.) I recommend reading the notes given below for your concerns about Kaspersky.
 
 > [!NOTE]
-> **[SplitWire-Turkey ZIP file VirusTotal results](https://www.virustotal.com/gui/file/2937aaaa52a6d90659f9b6fdfcfd05a55120e988f5328969c4a05a83b11581a3?nocache=1)** False positive virus or malware reports detected by antivirus software used by a small segment of users may be detected in the files, but these are software with unreliable detection methods. The reason for detection is that SplitWire-Turkey installs multiple applications from a single program and makes many changes on the system. (DNS changes, service and program package installation, removal, etc.) I recommend reading the notes given below for your concerns about Kaspersky.
+> **[SplitWire-Turkey ZIP file VirusTotal results](https://www.virustotal.com/gui/file-analysis/ODAxOWVjNDNiOGViZGU5MDJiOWU4MDI0YTRjMDcwZGI6MTc4OTQwMzE2Ng==)** False positive virus or malware reports detected by antivirus software used by a small segment of users may be detected in the files, but these are software with unreliable detection methods. The reason for detection is that SplitWire-Turkey installs multiple applications from a single program and makes many changes on the system. (DNS changes, service and program package installation, removal, etc.) I recommend reading the notes given below for your concerns about Kaspersky.
 
 > [!NOTE]
 > **WinDivert** files are detected as RiskTool by Kaspersky and a few antivirus software. As can be understood from the warning name **not-a-virus:HEUR:RiskTool.Multi.WinDivert.gen**, these files are; **not a virus**, it says it is a tool that can be harmful when used with files downloaded from wrong sources. Since SplitWire-Turkey and all its plugins are open source, you can track and understand how the WinDivert library is used. If you look at the detection descriptions, you can see the word NotAVirus. This detection type is defined as a risk tool because the open source WinDivert library used by GoodbyeDPI and Zapret manipulates network packets on Windows. This library is open source and can be accessed from [WinDivert Github](https://github.com/basil00/WinDivert). Unfortunately, despite all the efforts of both Russian and Turkish software developers, Kaspersky, which is pro-Russian government, and a few antivirus software companies together with it did not accept the reports and objections, so you cannot run methods using WinDivert if the relevant antivirus software is installed on your system. You can remove Kaspersky and other false positive antivirus software from your system and perform installation again to run WinDivert methods, or you can download and use the old version without WinDivert from [SplitWire-Turkey Release 1.0.0](https://github.com/cagritaskn/SplitWire-Turkey/releases/tag/1.0.0).
@@ -262,8 +294,8 @@ The antivirus software named Kaspersky, whether right or wrong, warns about this
 - **[drover](https://github.com/hdrover/discord-drover)** by **[hdrover](https://github.com/hdrover)**
 - **[GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI)** by **[ValdikSS](https://github.com/ValdikSS)**
 - **[zapret](https://github.com/bol-van/zapret)** by **[bol-van](https://github.com/bol-van)**
+- **[zapret2](https://github.com/bol-van/zapret2)** by **[bol-van](https://github.com/bol-van)**
 - **[WinDivert](https://github.com/basil00/WinDivert)** by **[basil00](https://github.com/basil00)**
-- **[WebCord](https://github.com/SpacingBat3/WebCord)** by **[SpacingBat3](https://github.com/SpacingBat3)**
 - **[SplitWire-Turkey-macOS](https://github.com/a-mertdincer/SplitWire-Turkey-macOS)** by **[a-mertdincer](https://github.com/a-mertdincer)**
 - **I would like to thank other people who contributed to the project and Patreon and Github sponsors very much**
 
@@ -283,14 +315,20 @@ Finds ideal parameters for your system and internet provider using blockcheck te
 - Zapret Preset Installation and One-time
 Zapret service is installed or run once with predetermined ready settings (or edited versions if you made edits).
 
+- Zapret2 Automatic Installation
+Finds ideal parameters for your system and internet provider using blockcheck2 technology and provides service installation by combining these parameters with your preferences. Ready settings for well-known Turkish ISPs such as Türk Telekom, Superonline and Vodafone are tried automatically first; if one works, a full scan is not needed at all. Scan speed selection adjusts how simple or deep the parameter scan will be.
+
+- Zapret2 Preset Installation and One-time
+Zapret2 service is installed or run once with predetermined ready settings (or edited versions if you made edits).
+
 - GoodbyeDPI Service Installation and One-time
 GoodbyeDPI service is installed or run once with predetermined ready settings (or edited versions if you made edits). If the Use blacklist option is active, bypass is applied only for domains in the blacklist. (By default, it is set for Roblox, Discord and Wattpad)
 
 - Remove All Services
 The bypass services installed by SplitWire-Turkey or by the user are listed and all are removed in the correct order. After this operation, no bypass method remains on your system.
 
-- Revert DNS and DoH Settings
-Before any installation you make in SplitWire-Turkey, all services are cleaned for clean installation, then Windows 11 supported DoH setting is activated and IPv4 and IPv6 DNS assignment is made (Google primary and Quad9 secondary DNS). (DoH activation is not supported for Windows 10 and below versions). The Revert DNS and DoH Settings button reverts these settings and returns DNS assignments to Automatic (DHCP) and closes DoH in Windows 11. (DoH is not activated for Windows 10 and below versions anyway)
+- DNS Method (DnsCrypt-Proxy / Windows DoH) and Revert DNS and DoH Settings
+Before any installation you make in SplitWire-Turkey, all services are cleaned for a clean installation, then one of two methods (never both) is applied according to the **DNS Method** switch on the **Advanced** tab: when the switch is on, DnsCrypt-Proxy is installed and your DNS is pointed to 127.0.0.1 and ::1 (encrypted DNS); when the switch is off, Windows 11 supported DoH is activated and IPv4/IPv6 DNS assignment is made (Google primary, Quad9 secondary DNS; DoH is not supported on Windows 10 and below). The Revert DNS and DoH Settings button reverts all of these settings regardless of which method was used, returning DNS assignments to Automatic (DHCP) and turning off DoH.
 
 - Remove SplitWire-Turkey
 This button performs all cleanup operations and runs the unins000.exe removal package. When the operations started with this button are completed, SplitWire-Turkey becomes as if it was never installed on your system before.
