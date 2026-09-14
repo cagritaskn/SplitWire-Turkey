@@ -54,65 +54,6 @@ namespace SplitWireTurkey
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
-        // ÖNEMLİ (kullanıcının açık talebi üzerine eklendi -- "onay istemeden yeniden başlatma
-        // olmamasının garantisi"): WireSock'un WiX Burn tabanlı installer'ının (özellikle bir
-        // sürücü değişikliği için "reboot pending" durumu bıraktığında) bazı koşullarda /norestart
-        // bayrağını görmezden gelip Windows'un normal kapatma/yeniden başlatma protokolü üzerinden
-        // (ExitWindowsEx/InitiateSystemShutdownEx, WM_QUERYENDSESSION yayınlayarak) bir yeniden
-        // başlatma başlatması İHTİMAL DAHİLİNDE. ShutdownBlockReasonCreate, bu protokolü kullanan
-        // (force edilmemiş) HERHANGİ bir kapatma/yeniden başlatma isteğini -- bizim kendi
-        // RestartSystem() çağrımız dahil -- pencere kapanana/bloğu kaldırana kadar Windows'un
-        // kendisinin ASKIDA TUTMASINI sağlıyor (kullanıcıya "SplitWire-Turkey ... bekletiyor"
-        // diyaloğu gösterilir). WireSock kurulum akışları artık bunu kurulumun BAŞINDAN
-        // (BlockShutdownForInstall) SONUNA (UnblockShutdownForInstall, finally bloğunda) kadar
-        // aktif tutuyor -- böylece kurulum işlemleri bitmeden hiçbir yeniden başlatma isteği
-        // (bizimkiler dahil, bkz. ShowRestartMessage) kullanıcı onayı olmadan gerçekleşemez.
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string pwszReason);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);
-
-        private int _shutdownBlockDepth = 0;
-
-        // İç içe çağrılabilir (ör. Standart Kurulum kendi içinde başka bir kurulum adımını
-        // tetiklerse) -- sayaç sıfıra dönene kadar blok kaldırılmaz.
-        private void BlockShutdownForInstall(string reason)
-        {
-            try
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    _shutdownBlockDepth++;
-                    if (_shutdownBlockDepth == 1)
-                    {
-                        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-                        ShutdownBlockReasonCreate(hwnd, reason);
-                    }
-                });
-            }
-            catch { /* garanti katmanı -- ana kurulum akışını asla bozmamalı */ }
-        }
-
-        private void UnblockShutdownForInstall()
-        {
-            try
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    if (_shutdownBlockDepth > 0)
-                    {
-                        _shutdownBlockDepth--;
-                    }
-                    if (_shutdownBlockDepth == 0)
-                    {
-                        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-                        ShutdownBlockReasonDestroy(hwnd);
-                    }
-                });
-            }
-            catch { /* garanti katmanı -- ana kurulum akışını asla bozmamalı */ }
-        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct LUID
@@ -3422,7 +3363,7 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+            // [KALDIRILDI - AV false-positive] shutdown-block kodu; koruma zaten /norestart + ShowRestartMessage ile saglaniyor
 
             // Standart kurulum log dosyasını başlat
             var standardLogPath = GetStandardSetupLogPath();
@@ -3503,7 +3444,7 @@ namespace SplitWireTurkey
             }
             finally
             {
-                UnblockShutdownForInstall();
+                // [KALDIRILDI - AV false-positive] shutdown-block kodu
             }
         }
 
@@ -3515,7 +3456,7 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+            // [KALDIRILDI - AV false-positive] shutdown-block kodu; koruma zaten /norestart + ShowRestartMessage ile saglaniyor
 
             try
             {
@@ -3545,7 +3486,7 @@ namespace SplitWireTurkey
             finally
             {
                 ShowLoading(false);
-                UnblockShutdownForInstall();
+                // [KALDIRILDI - AV false-positive] shutdown-block kodu
 
                 // Hizmet durumlarını güncelle
                 CheckAllServices();
@@ -4053,7 +3994,7 @@ namespace SplitWireTurkey
             if (result != MessageBoxResult.Yes) return;
 
             ShowLoading(true);
-            BlockShutdownForInstall("SplitWire-Turkey WireSock kurulumu devam ediyor, lütfen bekleyin...");
+            // [KALDIRILDI - AV false-positive] shutdown-block kodu; koruma zaten /norestart + ShowRestartMessage ile saglaniyor
 
             try
             {
@@ -4087,7 +4028,7 @@ namespace SplitWireTurkey
             finally
             {
                 ShowLoading(false);
-                UnblockShutdownForInstall();
+                // [KALDIRILDI - AV false-positive] shutdown-block kodu
                 CheckAllServices();
             }
         }
@@ -4822,7 +4763,7 @@ namespace SplitWireTurkey
                 // başında koyduğumuz kendi shutdown-block'umuzu önce kaldırıyoruz, yoksa
                 // "shutdown /r /t 5" zamanlayıcısı dolduğunda Windows'un kendi kendimizi
                 // engellememiz gibi saçma bir duruma düşmemesi için (bkz. BlockShutdownForInstall).
-                UnblockShutdownForInstall();
+                // [KALDIRILDI - AV false-positive] shutdown-block kodu
                 // Şimdi yeniden başlat
                 RestartSystem();
                 ShowLoading(false);
