@@ -18,13 +18,13 @@ if not errorlevel 1 (
 goto :done
 
 :process_service
-REM Hizmeti durdur
-sc stop "!SERVICE_NAME!" >nul 2>&1
+REM Hizmet zaten çalışıyorsa dokunma (gereksiz stop/start, WireGuard NDIS
+REM adaptörünün sürekli yeniden oluşturulmasına ve nadir de olsa IRQL
+REM çakışmalarına yol açabiliyor). Sadece gerçekten durmuşsa müdahale et.
+for /f "tokens=3" %%a in ('sc query "!SERVICE_NAME!" ^| findstr "STATE"') do set state=%%a
+if /i "!state!"=="RUNNING" goto :done
 
-REM 5 saniye bekle
-timeout /t 5 /nobreak >nul
-
-REM Hizmeti tekrar başlat
+REM Hizmeti başlat (zaten durmuş durumda, stop'a gerek yok)
 sc start "!SERVICE_NAME!" >nul 2>&1
 
 REM Başlatma sonrası 5 saniye bekle
