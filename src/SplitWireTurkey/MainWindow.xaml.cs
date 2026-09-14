@@ -4869,16 +4869,16 @@ namespace SplitWireTurkey
 try {
     $existingTask = Get-ScheduledTask -TaskName ""WireSockRefresh"" -ErrorAction SilentlyContinue
     if ($existingTask) {
-        Write-Host ""WireSockRefresh görevi bulundu, kaldırılıyor...""
+        Write-Host ""WireSockRefresh task found, removing...""
         Unregister-ScheduledTask -TaskName ""WireSockRefresh"" -Confirm:$false
-        Write-Host ""WireSockRefresh görevi başarıyla kaldırıldı""
+        Write-Host ""WireSockRefresh task removed successfully""
         exit 0
     } else {
-        Write-Host ""WireSockRefresh görevi bulunamadı""
+        Write-Host ""WireSockRefresh task not found""
         exit 0
     }
 } catch {
-    Write-Host ""Hata: $($_.Exception.Message)""
+    Write-Host ""Error: $($_.Exception.Message)""
     exit 1
 }";
                 
@@ -4950,11 +4950,11 @@ try {
         $result | ConvertTo-Json
         exit 0
     } else {
-        Write-Host ""Görev bulunamadı""
+        Write-Host ""Task not found""
         exit 1
     }
 } catch {
-    Write-Host ""Hata: $($_.Exception.Message)""
+    Write-Host ""Error: $($_.Exception.Message)""
     exit 1
 }";
                 
@@ -5014,7 +5014,7 @@ try {
                 var escapedBatchPath = batchPath.Replace("\"", "`\"");
                 var psCommand = $@"
 try {{
-    # Önce mevcut görevi kontrol et ve varsa kaldır
+    # Remove any existing task first
     $existingTask = Get-ScheduledTask -TaskName 'WireSockRefresh' -ErrorAction SilentlyContinue
     if ($existingTask) {{
         Write-Host 'Existing WireSockRefresh task found, removing...'
@@ -5022,11 +5022,11 @@ try {{
         Write-Host 'Existing task removed'
         Start-Sleep -Seconds 2
     }}
-    
-    # Batch dosya yolunu değişkene ata
+
+    # Assign the batch file path to a variable
     $BatchPath = '{escapedBatchPath}'
-    
-    # Yeni görevi oluştur - Direkt batch dosyası çalıştır
+
+    # Create the new task - runs the batch file directly
     $Action = New-ScheduledTaskAction -Execute $BatchPath
     $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 3) -RepetitionDuration (New-TimeSpan -Days 3650)
     $Principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
