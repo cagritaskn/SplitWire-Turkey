@@ -1,0 +1,107 @@
+name: Cache Optimization
+
+on:
+  schedule:
+    # Her hafta Pazartesi saat 01:00 UTC'de cache temizliği
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+    inputs:
+      cache_action:
+        description: 'Cache action to perform'
+        required: false
+        default: 'cleanup'
+        type: choice
+        options:
+        - 'cleanup'
+        - 'warm-up'
+        - 'analyze'
+
+jobs:
+  cache-management:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          8.0.x
+          9.0.x
+          
+    - name: Cache warm-up
+      if: github.event.inputs.cache_action == 'warm-up' || github.event_name == 'schedule'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.nuget/packages
+          ~/.dotnet/tools
+          src/**/bin
+          src/**/obj
+        key: ${{ runner.os }}-cache-warmup-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+          ${{ runner.os }}-dotnet-tools-
+          ${{ runner.os }}-build-
+          
+    - name: Pre-populate caches
+      if: github.event.inputs.cache_action == 'warm-up' || github.event_name == 'schedule'
+      run: |
+        Write-Host "🔥 Warming up caches..."
+        
+        # Restore all projects to populate NuGet cache
+        dotnet restore src/SplitWireTurkey/SplitWireTurkey.csproj
+        dotnet restore src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj
+        
+        # Build to populate build cache
+        dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Release
+        dotnet build src/SplitWireTurkey/SplitWireTurkey.csproj --configuration Debug
+        dotnet build src/SplitWireTurkey.Tests/SplitWire-Turkey.Tests.csproj --configuration Release
+        
+        # Install common tools to populate tools cache
+        dotnet tool install --global dotnet-format --version 5.1.250801
+        dotnet tool install --global security-scan --version 5.6.7
+        dotnet tool install --global dotnet-outdated-tool
+        
+        Write-Host "✅ Cache warm-up completed"
+      shell: pwsh
+      
+    - name: Analyze cache usage
+      if: github.event.inputs.cache_action == 'analyze' || github.event_name == 'schedule'
+      run: |
+        Write-Host "📊 Analyzing cache usage..."
+        
+        $nugetPath = "~/.nuget/packages"
+        $toolsPath = "~/.dotnet/tools"
+        
+        if (Test-Path $nugetPath) {
+          $nugetSize = (Get-ChildItem $nugetPath -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host "NuGet cache size: $([math]::Round($nugetSize / 1MB, 2)) MB"
+        }
+        
+        if (Test-Path $toolsPath) {
+          $toolsSize = (Get-ChildItem $toolsPath -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host "Tools cache size: $([math]::Round($toolsSize / 1MB, 2)) MB"
+        }
+        
+        $buildDirs = Get-ChildItem "src" -Recurse -Directory | Where-Object { $_.Name -eq "bin" -or $_.Name -eq "obj" }
+        if ($buildDirs) {
+          $buildSize = ($buildDirs | Get-ChildItem -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host "Build cache size: $([math]::Round($buildSize / 1MB, 2)) MB"
+        }
+        
+        Write-Host "📈 Cache analysis completed"
+      shell: pwsh
+      
+    - name: Cache cleanup recommendations
+      if: github.event.inputs.cache_action == 'cleanup'
+      run: |
+        Write-Host "🧹 Cache cleanup recommendations:"
+        Write-Host "- Old NuGet packages can be cleared with: dotnet nuget locals all --clear"
+        Write-Host "- Build outputs are automatically managed by cache keys"
+        Write-Host "- Tools cache is shared across workflows for efficiency"
+        Write-Host "- Cache keys include file hashes for automatic invalidation"
+      shell: pwsh
