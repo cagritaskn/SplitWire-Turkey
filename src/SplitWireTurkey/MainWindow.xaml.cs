@@ -88,6 +88,7 @@ namespace SplitWireTurkey
 
         // Registry sabitleri
         private const string REG_KEY_PATH = @"Software\SplitWire-Turkey";
+        private const string REG_GOODBYEDPI_PRESET = "GoodbyeDPIPreset";
         private const string REG_THEME_KEY = "Theme";
         private const string REG_IS_DARK_MODE = "IsDarkMode";
         private const string REG_LAST_UPDATED = "LastUpdated";
@@ -11833,7 +11834,55 @@ echo Hizmet kurulum işlemi tamamlandı.
                 var presetName = selectedItem.Content.ToString();
                 var parameters = GetGoodbyeDPIPresetParameters(presetName);
                 txtGoodbyeDPIParams.Text = parameters;
+                SaveGoodbyeDPIPreset(presetName);
             }
+        }
+
+        private void SaveGoodbyeDPIPreset(string presetName)
+        {
+            if (string.IsNullOrEmpty(presetName)) return;
+            try
+            {
+                using (var key = Registry.CurrentUser.CreateSubKey(REG_KEY_PATH))
+                {
+                    key?.SetValue(REG_GOODBYEDPI_PRESET, presetName, RegistryValueKind.String);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GoodbyeDPI preset kaydedilemedi: {ex.Message}");
+            }
+        }
+
+        private void SelectSavedGoodbyeDPIPreset()
+        {
+            string saved = null;
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(REG_KEY_PATH))
+                {
+                    saved = key?.GetValue(REG_GOODBYEDPI_PRESET) as string;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GoodbyeDPI preset okunamadı: {ex.Message}");
+            }
+
+            if (!string.IsNullOrEmpty(saved))
+            {
+                for (int i = 0; i < cmbGoodbyeDPIPresets.Items.Count; i++)
+                {
+                    if (cmbGoodbyeDPIPresets.Items[i] is ComboBoxItem item &&
+                        string.Equals(item.Content?.ToString(), saved, StringComparison.Ordinal))
+                    {
+                        cmbGoodbyeDPIPresets.SelectedIndex = i;
+                        return;
+                    }
+                }
+            }
+
+            cmbGoodbyeDPIPresets.SelectedIndex = 0;
         }
 
         private void ChkGoodbyeDPIManualParams_Checked(object sender, RoutedEventArgs e)
@@ -15297,7 +15346,7 @@ echo Hizmet kurulum işlemi tamamlandı.
                     
                     if (cmbGoodbyeDPIPresets.Items.Count > 0)
                     {
-                        cmbGoodbyeDPIPresets.SelectedIndex = 0;
+                        SelectSavedGoodbyeDPIPreset();
                     }
                 }
                 else
