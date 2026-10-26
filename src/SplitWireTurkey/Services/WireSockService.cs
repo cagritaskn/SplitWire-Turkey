@@ -119,14 +119,13 @@ namespace SplitWireTurkey.Services
                     // sürücü kaydını TAMAMLAMAK için gereken bir yeniden başlatma bekleniyordur) ve
                     // "connect" denemeden AÇIKÇA hata veriyoruz -- yanlış "başarılı" raporu vermek
                     // yerine.
-                    var servicesRegisteredBefore = await IsServiceRunningAsync();
+                    var servicesRegisteredBefore = await Task.Run(() => AreRequiredWireSockServicesRegistered(wiresockExe));
                     if (!servicesRegisteredBefore)
                     {
                         Debug.WriteLine("WireSockAppService/WireSockConnectService kayıtlı değil -- temel ürün kurulumu eksik veya yarım kalmış olabilir.");
                         System.Windows.MessageBox.Show(
                             "WireSock arka plan servisleri (WireSockAppService/WireSockConnectService) sistemde kayıtlı değil. " +
-                            "Bu genellikle WireSock'un temel kurulumunun (sürücü kaydı) tamamlanması için bir SİSTEM YENİDEN BAŞLATMASI " +
-                            "gerektiği anlamına gelir. Lütfen bilgisayarı yeniden başlatıp kurulumu tekrar deneyin.",
+                            "WireSock kurulumu eksik veya hizmetler kaldırılmış. Lütfen WireSock kurulumunu uygulama üzerinden tekrar çalıştırın.",
                             LanguageManager.GetText("messages", "unexpected_error_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
                         return false;
                     }
@@ -139,29 +138,34 @@ namespace SplitWireTurkey.Services
                     if (string.IsNullOrWhiteSpace(profileName))
                         profileName = "wgcf-profile";
 
+                    await ExecuteCommandAsync(wiresockExe, "disconnect");
+
                     // 2. Varsa eski profili temizle
                     await ExecuteCommandAsync(wiresockExe, $"delete \"{profileName}\"");
 
                     // 3. Yeni profili içe aktar
-                    var importResult = await ExecuteCommandAsync(wiresockExe, $"import \"{configPath}\"");
-                    if (importResult != 0)
+                    var importResult = await RunCommandAsync(wiresockExe, $"import \"{configPath}\"");
+                    if (importResult.ExitCode != 0)
                     {
-                        Debug.WriteLine($"WireSock 3.x profil içe aktarılamadı (Exit Code: {importResult})");
+                        MessageBox.Show(string.Format(LanguageManager.GetText("messages", "wiresock_install_failed"),
+                            importResult.Output), LanguageManager.GetText("messages", "unexpected_error_title"),
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        return false;
                     }
 
                     // 4. Profile bağlan ve arka planda çalışması için -exit parametresi ver
-                    var connectResult = await ExecuteCommandAsync(wiresockExe, $"connect \"{profileName}\" -exit");
-                    Debug.WriteLine($"WireSock connect exit code: {connectResult}");
+                    var connectResult = await RunCommandAsync(wiresockExe, $"connect \"{profileName}\" -exit");
 
-                    // 5. Hizmetin GERÇEKTEN kayıtlı/çalışır durumda olduğunu doğrula -- SADECE
-                    // connectResult==0'a güvenmiyoruz artık (yukarıdaki not), gerçek servis
-                    // durumunu birkaç kez (servis "connect" sonrası anında sorgulanamayabilir)
-                    // kontrol ediyoruz.
+                    // Service registration alone does not confirm a connected tunnel; poll CLI status for the active profile.
                     var isRunning = false;
-                    for (int attempt = 0; attempt < 4 && !isRunning; attempt++)
+                    var statusOutput = connectResult.Output;
+                    for (int attempt = 0; connectResult.ExitCode == 0 && attempt < 15 && !isRunning; attempt++)
                     {
                         if (attempt > 0) await Task.Delay(1000);
-                        isRunning = await IsServiceRunningAsync();
+                        var status = await RunCommandAsync(wiresockExe, "status");
+                        statusOutput = status.Output;
+                        isRunning = status.ExitCode == 0 &&
+                            status.Output.Contains(profileName, StringComparison.OrdinalIgnoreCase);
                     }
 
                     if (isRunning)
@@ -170,7 +174,8 @@ namespace SplitWireTurkey.Services
                     }
                     else
                     {
-                        System.Windows.MessageBox.Show(string.Format(LanguageManager.GetText("messages", "wiresock_install_failed"), connectResult),
+                        System.Windows.MessageBox.Show(string.Format(LanguageManager.GetText("messages", "wiresock_install_failed"),
+                            $"{connectResult.Output}\n{statusOutput}"),
                             LanguageManager.GetText("messages", "unexpected_error_title"), MessageBoxButton.OK, MessageBoxImage.Error);
                         return false;
                     }
@@ -318,41 +323,81 @@ namespace SplitWireTurkey.Services
 
         private async Task<int> ExecuteCommandAsync(string command, string arguments)
         {
-            return await Task.Run(() =>
+            return (await RunCommandAsync(command, arguments)).ExitCode;
+        }
+
+        private async Task<(int ExitCode, string Output)> RunCommandAsync(string command, string arguments)
+        {
+            try
             {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = command,
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using var process = new Process { StartInfo = startInfo };
+                process.Start();
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                var timedOut = false;
                 try
                 {
-                    var startInfo = new ProcessStartInfo
-                    {
-                        FileName = command,
-                        Arguments = arguments,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true
-                    };
-
-                    using var process = new Process { StartInfo = startInfo };
-                    process.Start();
-                    process.WaitForExit();
-                    return process.ExitCode;
+                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
                 }
-                catch (Exception ex)
+                catch (TimeoutException)
                 {
-                    Debug.WriteLine($"Command execution failed: {ex.Message}");
-                    return -1;
+                    timedOut = true;
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
                 }
-            });
+                var output = $"{await outputTask}\n{await errorTask}".Trim();
+                if (timedOut) output = $"Command timed out after 30 seconds.\n{output}";
+                var exitCode = timedOut ? -1 : process.ExitCode;
+                LogCommand(command, arguments, exitCode, output);
+                return (exitCode, output);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Command execution failed: {ex.Message}");
+                LogCommand(command, arguments, -1, ex.Message);
+                return (-1, ex.Message);
+            }
+        }
+
+        private static void LogCommand(string command, string arguments, int exitCode, string output)
+        {
+            try
+            {
+                var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "SplitWire-Turkey", "Logs");
+                Directory.CreateDirectory(directory);
+                File.AppendAllText(Path.Combine(directory, "wiresock.log"),
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {Path.GetFileName(command)} {arguments}\nExit Code: {exitCode}\n{output}\n");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"WireSock log failed: {ex.Message}");
+            }
         }
 
         public bool IsWireSockInstalled()
         {
-            return !string.IsNullOrEmpty(FindWireSockPath());
+            var path = FindWireSockPath();
+            return !string.IsNullOrEmpty(path) && AreRequiredWireSockServicesRegistered(path);
         }
 
         public async Task<bool> IsWireSockInstalledAsync()
         {
-            return await Task.Run(() => !string.IsNullOrEmpty(FindWireSockPathOptimized()));
+            return await Task.Run(() =>
+            {
+                var path = FindWireSockPathOptimized();
+                return !string.IsNullOrEmpty(path) && AreRequiredWireSockServicesRegistered(path);
+            });
         }
 
         // ÖNEMLİ (kullanıcının "WireSock hizmeti yine kurulmadı" bildirimiyle bulunan kök sebep):
@@ -364,9 +409,12 @@ namespace SplitWireTurkey.Services
         // ÇALIŞTIRMIYORDU -- silinen servisler bir daha asla yeniden kurulmuyordu. Artık dosya
         // varlığına EK OLARAK servislerin GERÇEKTEN kayıtlı olduğunu da (senkron sc query ile)
         // doğruluyoruz.
-        private bool IsAnyWireSockServiceRegisteredSync()
+        private bool AreRequiredWireSockServicesRegistered(string path)
         {
-            foreach (var svc in new[] { "WireSockAppService", "WireSockConnectService", "wiresock-client-service" })
+            var serviceNames = IsModernWireSock(path)
+                ? new[] { "WireSockAppService", "WireSockConnectService" }
+                : new[] { "wiresock-client-service" };
+            foreach (var svc in serviceNames)
             {
                 try
                 {
@@ -380,15 +428,24 @@ namespace SplitWireTurkey.Services
                         CreateNoWindow = true
                     };
                     using var process = Process.Start(psi);
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
                     process.WaitForExit();
-                    if (process.ExitCode == 0)
+                    var output = $"{outputTask.GetAwaiter().GetResult()}\n{errorTask.GetAwaiter().GetResult()}".Trim();
+                    LogCommand("sc", $"query {svc}", process.ExitCode, output);
+                    if (process.ExitCode != 0)
                     {
-                        return true;
+                        return false;
                     }
                 }
-                catch { /* servis kontrolü başarısız olursa diğer isme geç */ }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Service registration check failed for {svc}: {ex.Message}");
+                    LogCommand("sc", $"query {svc}", -1, ex.Message);
+                    return false;
+                }
             }
-            return false;
+            return true;
         }
 
         public bool IsLatestWireSockInstalled()
@@ -421,7 +478,7 @@ namespace SplitWireTurkey.Services
                         // Dosya varlığı TEK BAŞINA yeterli değil -- servisler de kayıtlı olmalı,
                         // yoksa "zaten kurulu" yanlış pozitifi kurulumu atlatıp bir daha hiç
                         // düzeltilemeyecek bir duruma yol açıyordu.
-                        if (File.Exists(path) && IsAnyWireSockServiceRegisteredSync())
+                        if (File.Exists(path) && AreRequiredWireSockServicesRegistered(path))
                             return true;
                     }
                 }
@@ -487,4 +544,4 @@ namespace SplitWireTurkey.Services
             }
         }
     }
-} 
+}
